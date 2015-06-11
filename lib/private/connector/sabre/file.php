@@ -45,6 +45,8 @@ use OCP\Files\InvalidPathException;
 use OCP\Files\LockNotAcquiredException;
 use OCP\Files\NotPermittedException;
 use OCP\Files\StorageNotAvailableException;
+use OCP\Lock\ILockingProvider;
+use OCP\Lock\LockedException;
 use Sabre\DAV\Exception;
 use Sabre\DAV\Exception\BadRequest;
 use Sabre\DAV\Exception\Forbidden;
@@ -79,6 +81,7 @@ class File extends Node implements IFile {
 	 * @throws Exception
 	 * @throws EntityTooLarge
 	 * @throws ServiceUnavailable
+	 * @throws FileLocked
 	 * @return string|null
 	 */
 	public function put($data) {
@@ -99,8 +102,8 @@ class File extends Node implements IFile {
 			return $this->createFileChunked($data);
 		}
 
-		list($storage) = $this->fileView->resolvePath($this->path);
-		$needsPartFile = $this->needsPartFile($storage) && (strlen($this->path) > 1);
+		list($partStorage) = $this->fileView->resolvePath($this->path);
+		$needsPartFile = $this->needsPartFile($partStorage) && (strlen($this->path) > 1);
 
 		if ($needsPartFile) {
 			// mark file as partial while uploading (ignored by the scanner)
@@ -110,14 +113,22 @@ class File extends Node implements IFile {
 			$partFilePath = $this->path;
 		}
 
-		/** @var \OC\Files\Storage\Storage $storage */
-		list($storage, $internalPartPath) = $this->fileView->resolvePath($partFilePath);
-		list(, $internalPath) = $this->fileView->resolvePath($this->path);
 		try {
-			$target = $storage->fopen($internalPartPath, 'wb');
+			$this->fileView->lockFile($this->path, ILockingProvider::LOCK_EXCLUSIVE);
+		} catch (LockedException $e) {
+			throw new FileLocked($e->getMessage(), $e->getCode(), $e);
+		}
+
+		// the part file and target file might be on a different storage in case of a single file storage (e.g. single file share)
+		/** @var \OC\Files\Storage\Storage $partStorage */
+		list($partStorage, $internalPartPath) = $this->fileView->resolvePath($partFilePath);
+		/** @var \OC\Files\Storage\Storage $storage */
+		list($storage, $internalPath) = $this->fileView->resolvePath($this->path);
+		try {
+			$target = $partStorage->fopen($internalPartPath, 'wb');
 			if ($target === false) {
 				\OC_Log::write('webdav', '\OC\Files\Filesystem::fopen() failed', \OC_Log::ERROR);
-				$storage->unlink($internalPartPath);
+				$partStorage->unlink($internalPartPath);
 				// because we have no clue about the cause we can only throw back a 500/Internal Server Error
 				throw new Exception('Could not write file contents');
 			}
@@ -130,7 +141,7 @@ class File extends Node implements IFile {
 			if (isset($_SERVER['CONTENT_LENGTH']) && $_SERVER['REQUEST_METHOD'] !== 'LOCK') {
 				$expected = $_SERVER['CONTENT_LENGTH'];
 				if ($count != $expected) {
-					$storage->unlink($internalPartPath);
+					$partStorage->unlink($internalPartPath);
 					throw new BadRequest('expected filesize ' . $expected . ' got ' . $count);
 				}
 			}
@@ -159,14 +170,38 @@ class File extends Node implements IFile {
 		}
 
 		try {
+			$view = \OC\Files\Filesystem::getView();
+			$run = true;
+			if ($view) {
+				$hookPath = $view->getRelativePath($this->fileView->getAbsolutePath($this->path));
+
+				if (!$exists) {
+					\OC_Hook::emit(\OC\Files\Filesystem::CLASSNAME, \OC\Files\Filesystem::signal_create, array(
+						\OC\Files\Filesystem::signal_param_path => $hookPath,
+						\OC\Files\Filesystem::signal_param_run => &$run,
+					));
+				} else {
+					\OC_Hook::emit(\OC\Files\Filesystem::CLASSNAME, \OC\Files\Filesystem::signal_update, array(
+						\OC\Files\Filesystem::signal_param_path => $hookPath,
+						\OC\Files\Filesystem::signal_param_run => &$run,
+					));
+				}
+				\OC_Hook::emit(\OC\Files\Filesystem::CLASSNAME, \OC\Files\Filesystem::signal_write, array(
+					\OC\Files\Filesystem::signal_param_path => $hookPath,
+					\OC\Files\Filesystem::signal_param_run => &$run,
+				));
+			}
+
 			if ($needsPartFile) {
 				// rename to correct path
 				try {
-					$renameOkay = $storage->rename($internalPartPath, $internalPath);
-					$fileExists = $storage->file_exists($internalPath);
-					if ($renameOkay === false || $fileExists === false) {
-						\OC_Log::write('webdav', '\OC\Files\Filesystem::rename() failed', \OC_Log::ERROR);
-						$storage->unlink($internalPartPath);
+					if ($run) {
+						$renameOkay = $storage->moveFromStorage($partStorage, $internalPartPath, $internalPath);
+						$fileExists = $storage->file_exists($internalPath);
+					}
+					if (!$run || $renameOkay === false || $fileExists === false) {
+						\OC_Log::write('webdav', 'renaming part file to final file failed', \OC_Log::ERROR);
+						$partStorage->unlink($internalPartPath);
 						throw new Exception('Could not rename part file to final file');
 					}
 				} catch (\OCP\Files\LockNotAcquiredException $e) {
@@ -176,11 +211,10 @@ class File extends Node implements IFile {
 			}
 
 			// since we skipped the view we need to scan and emit the hooks ourselves
-			$storage->getScanner()->scanFile($internalPath);
+			$partStorage->getScanner()->scanFile($internalPath);
 
-			$view = \OC\Files\Filesystem::getView();
 			if ($view) {
-				$hookPath = $view->getRelativePath($this->fileView->getAbsolutePath($this->path));
+				$this->fileView->getUpdater()->propagate($hookPath);
 				if (!$exists) {
 					\OC_Hook::emit(\OC\Files\Filesystem::CLASSNAME, \OC\Files\Filesystem::signal_post_create, array(
 						\OC\Files\Filesystem::signal_param_path => $hookPath
@@ -207,6 +241,8 @@ class File extends Node implements IFile {
 			throw new ServiceUnavailable("Failed to check file size: " . $e->getMessage());
 		}
 
+		$this->fileView->unlockFile($this->path, ILockingProvider::LOCK_EXCLUSIVE);
+
 		return '"' . $this->info->getEtag() . '"';
 	}
 
@@ -227,6 +263,8 @@ class File extends Node implements IFile {
 			throw new ServiceUnavailable("Encryption not ready: " . $e->getMessage());
 		} catch (StorageNotAvailableException $e) {
 			throw new ServiceUnavailable("Failed to open file: " . $e->getMessage());
+		} catch (LockedException $e) {
+			throw new FileLocked($e->getMessage(), $e->getCode(), $e);
 		}
 	}
 
@@ -248,6 +286,8 @@ class File extends Node implements IFile {
 			}
 		} catch (StorageNotAvailableException $e) {
 			throw new ServiceUnavailable("Failed to unlink: " . $e->getMessage());
+		} catch (LockedException $e) {
+			throw new FileLocked($e->getMessage(), $e->getCode(), $e);
 		}
 	}
 
@@ -353,6 +393,8 @@ class File extends Node implements IFile {
 				return $info->getEtag();
 			} catch (StorageNotAvailableException $e) {
 				throw new ServiceUnavailable("Failed to put file: " . $e->getMessage());
+			} catch (LockedException $e) {
+				throw new FileLocked($e->getMessage(), $e->getCode(), $e);
 			}
 		}
 

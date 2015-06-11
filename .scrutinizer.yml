@@ -18,3 +18,7 @@ filter:
 imports:
     - javascript
     - php
+
+tools:
+    external_code_coverage:
+        timeout: 3600    # Timeout in seconds. 60 minutes

@@ -131,6 +131,11 @@ class KeyManager {
 			$this->config->setAppValue('encryption', 'publicShareKeyId', $this->publicShareKeyId);
 		}
 
+		$this->keyId = $userSession && $userSession->isLoggedIn() ? $userSession->getUser()->getUID() : false;
+		$this->log = $log;
+	}
+
+	public function validateShareKey() {
 		$shareKey = $this->getPublicShareKey();
 		if (empty($shareKey)) {
 			$keyPair = $this->crypt->createKeyPair();
@@ -145,9 +150,6 @@ class KeyManager {
 			$header = $this->crypt->generateHeader();
 			$this->setSystemPrivateKey($this->publicShareKeyId, $header . $encryptedKey);
 		}
-
-		$this->keyId = $userSession && $userSession->isLoggedIn() ? $userSession->getUser()->getUID() : false;
-		$this->log = $log;
 	}
 
 	/**
@@ -481,7 +483,7 @@ class KeyManager {
 	}
 
 	public function deleteAllFileKeys($path) {
-		return $this->keyStorage->deleteAllFileKeys($path, Encryption::ID);
+		return $this->keyStorage->deleteAllFileKeys($path);
 	}
 
 	/**
@@ -529,10 +531,11 @@ class KeyManager {
 	 *
 	 * @param array $accessList
 	 * @param array $publicKeys
+	 * @param string $uid
 	 * @return array
 	 * @throws PublicKeyMissingException
 	 */
-	public function addSystemKeys(array $accessList, array $publicKeys) {
+	public function addSystemKeys(array $accessList, array $publicKeys, $uid) {
 		if (!empty($accessList['public'])) {
 			$publicShareKey = $this->getPublicShareKey();
 			if (empty($publicShareKey)) {
@@ -542,7 +545,7 @@ class KeyManager {
 		}
 
 		if ($this->recoveryKeyExists() &&
-			$this->util->isRecoveryEnabledForUser()) {
+			$this->util->isRecoveryEnabledForUser($uid)) {
 
 			$publicKeys[$this->getRecoveryKeyId()] = $this->getRecoveryKey();
 		}

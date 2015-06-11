@@ -158,7 +158,7 @@ class Storage {
 			// 1.5 times as large as the current version -> 2.5
 			$neededSpace = $files_view->filesize($filename) * 2.5;
 
-			self::scheduleExpire($filename, $versionsSize, $neededSpace);
+			self::scheduleExpire($uid, $filename, $versionsSize, $neededSpace);
 
 			// store a new version of a file
 			$mtime = $users_view->filemtime('files/' . $filename);
@@ -223,50 +223,75 @@ class Storage {
 	}
 
 	/**
-	 * rename or copy versions of a file
-	 * @param string $old_path
-	 * @param string $new_path
+	 * Rename or copy versions of a file of the given paths
+	 *
+	 * @param string $sourcePath source path of the file to move, relative to
+	 * the currently logged in user's "files" folder
+	 * @param string $targetPath target path of the file to move, relative to
+	 * the currently logged in user's "files" folder
 	 * @param string $operation can be 'copy' or 'rename'
 	 */
-	public static function renameOrCopy($old_path, $new_path, $operation) {
-		list($uid, $oldpath) = self::getSourcePathAndUser($old_path);
+	public static function renameOrCopy($sourcePath, $targetPath, $operation) {
+		list($sourceOwner, $sourcePath) = self::getSourcePathAndUser($sourcePath);
 
 		// it was a upload of a existing file if no old path exists
 		// in this case the pre-hook already called the store method and we can
 		// stop here
-		if ($oldpath === false) {
+		if ($sourcePath === false) {
 			return true;
 		}
 
-		list($uidn, $newpath) = self::getUidAndFilename($new_path);
-		$versions_view = new \OC\Files\View('/'.$uid .'/files_versions');
-		$files_view = new \OC\Files\View('/'.$uid .'/files');
+		list($targetOwner, $targetPath) = self::getUidAndFilename($targetPath);
 
+		$sourcePath = ltrim($sourcePath, '/');
+		$targetPath = ltrim($targetPath, '/');
 
+		$rootView = new \OC\Files\View('');
 
-		if ( $files_view->is_dir($oldpath) && $versions_view->is_dir($oldpath) ) {
-			$versions_view->$operation($oldpath, $newpath);
-		} else  if ( ($versions = Storage::getVersions($uid, $oldpath)) ) {
+		// did we move a directory ?
+		if ($rootView->is_dir('/' . $targetOwner . '/files/' . $targetPath)) {
+			// does the directory exists for versions too ?
+			if ($rootView->is_dir('/' . $sourceOwner . '/files_versions/' . $sourcePath)) {
+				// create missing dirs if necessary
+				self::createMissingDirectories($targetPath, new \OC\Files\View('/'. $targetOwner));
+
+				// move the directory containing the versions
+				$rootView->$operation(
+					'/' . $sourceOwner . '/files_versions/' . $sourcePath,
+					'/' . $targetOwner . '/files_versions/' . $targetPath
+				);
+			}
+		} else if ($versions = Storage::getVersions($sourceOwner, '/' . $sourcePath)) {
 			// create missing dirs if necessary
-			self::createMissingDirectories($newpath, new \OC\Files\View('/'. $uidn));
+			self::createMissingDirectories($targetPath, new \OC\Files\View('/'. $targetOwner));
 
 			foreach ($versions as $v) {
-				$versions_view->$operation($oldpath.'.v'.$v['version'], $newpath.'.v'.$v['version']);
+				// move each version one by one to the target directory
+				$rootView->$operation(
+					'/' . $sourceOwner . '/files_versions/' . $sourcePath.'.v' . $v['version'],
+					'/' . $targetOwner . '/files_versions/' . $targetPath.'.v'.$v['version']
+				);
 			}
 		}
 
-		if (!$files_view->is_dir($newpath)) {
-			self::scheduleExpire($newpath);
+		// if we moved versions directly for a file, schedule expiration check for that file
+		if (!$rootView->is_dir('/' . $targetOwner . '/files/' . $targetPath)) {
+			self::scheduleExpire($targetOwner, $targetPath);
 		}
 
 	}
 
 	/**
-	 * rollback to an old version of a file.
+	 * Rollback to an old version of a file.
+	 *
+	 * @param string $file file name
+	 * @param int $revision revision timestamp
 	 */
 	public static function rollback($file, $revision) {
 
 		if(\OCP\Config::getSystemValue('files_versions', Storage::DEFAULTENABLED)=='true') {
+			// add expected leading slash
+			$file = '/' . ltrim($file, '/');
 			list($uid, $filename) = self::getUidAndFilename($file);
 			$users_view = new \OC\Files\View('/'.$uid);
 			$files_view = new \OC\Files\View('/'.\OCP\User::getUser().'/files');
@@ -282,12 +307,11 @@ class Storage {
 			}
 
 			// rollback
-			if( @$users_view->rename('files_versions'.$filename.'.v'.$revision, 'files'.$filename) ) {
+			if (self::copyFileContents($users_view, 'files_versions' . $filename . '.v' . $revision, 'files' . $filename)) {
 				$files_view->touch($file, $revision);
-				Storage::scheduleExpire($file);
+				Storage::scheduleExpire($uid, $file);
 				return true;
-
-			}else if ( $versionCreated ) {
+			} else if ($versionCreated) {
 				self::deleteVersion($users_view, $version);
 			}
 		}
@@ -295,6 +319,23 @@ class Storage {
 
 	}
 
+	/**
+	 * Stream copy file contents from $path1 to $path2
+	 *
+	 * @param \OC\Files\View $view view to use for copying
+	 * @param string $path1 source file to copy
+	 * @param string $path2 target file
+	 *
+	 * @return bool true for success, false otherwise
+	 */
+	private static function copyFileContents($view, $path1, $path2) {
+		list($storage1, $internalPath1) = $view->resolvePath($path1);
+		list($storage2, $internalPath2) = $view->resolvePath($path2);
+
+		$result = $storage2->moveFromStorage($storage1, $internalPath1, $internalPath2);
+
+		return ($result !== false);
+	}
 
 	/**
 	 * get a list of all available versions of a file in descending chronological order
@@ -305,6 +346,9 @@ class Storage {
 	 */
 	public static function getVersions($uid, $filename, $userFullPath = '') {
 		$versions = array();
+		if (empty($filename)) {
+			return $versions;
+		}
 		// fetch for old versions
 		$view = new \OC\Files\View('/' . $uid . '/');
 
@@ -488,12 +532,15 @@ class Storage {
 	}
 
 	/**
-	 * @param string $fileName
-	 * @param int|null $versionsSize
-	 * @param int $neededSpace
+	 * Schedule versions expiration for the given file
+	 *
+	 * @param string $uid owner of the file
+	 * @param string $fileName file/folder for which to schedule expiration
+	 * @param int|null $versionsSize current versions size
+	 * @param int $neededSpace requested versions size
 	 */
-	private static function scheduleExpire($fileName, $versionsSize = null, $neededSpace = 0) {
-		$command = new Expire(\OC::$server->getUserSession()->getUser()->getUID(), $fileName, $versionsSize, $neededSpace);
+	private static function scheduleExpire($uid, $fileName, $versionsSize = null, $neededSpace = 0) {
+		$command = new Expire($uid, $fileName, $versionsSize, $neededSpace);
 		\OC::$server->getCommandBus()->push($command);
 	}
 
@@ -509,6 +556,10 @@ class Storage {
 		$config = \OC::$server->getConfig();
 		if($config->getSystemValue('files_versions', Storage::DEFAULTENABLED)=='true') {
 			list($uid, $filename) = self::getUidAndFilename($filename);
+			if (empty($filename)) {
+				// file maybe renamed or deleted
+				return false;
+			}
 			$versionsFileview = new \OC\Files\View('/'.$uid.'/files_versions');
 
 			// get available disk space for user
@@ -601,8 +652,11 @@ class Storage {
 	}
 
 	/**
-	 * create recursively missing directories
-	 * @param string $filename $path to a file
+	 * Create recursively missing directories inside of files_versions
+	 * that match the given path to a file.
+	 *
+	 * @param string $filename $path to a file, relative to the user's
+	 * "files" folder
 	 * @param \OC\Files\View $view view on data/user/
 	 */
 	private static function createMissingDirectories($filename, $view) {

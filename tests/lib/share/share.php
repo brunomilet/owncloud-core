@@ -105,6 +105,12 @@ class Test_Share extends \Test\TestCase {
 		parent::tearDown();
 	}
 
+	protected function setHttpHelper($httpHelper) {
+		\OC::$server->registerService('HTTPHelper', function () use ($httpHelper) {
+			return $httpHelper;
+		});
+	}
+
 	public function testShareInvalidShareType() {
 		$message = 'Share type foobar is not valid for test.txt';
 		try {
@@ -495,6 +501,38 @@ class Test_Share extends \Test\TestCase {
 
 	}
 
+	public function testSharingAFolderThatIsSharedWithAGroupOfTheOwner() {
+		OC_User::setUserId($this->user1);
+		$view = new \OC\Files\View('/' . $this->user1 . '/');
+		$view->mkdir('files/test');
+		$view->mkdir('files/test/sub1');
+		$view->mkdir('files/test/sub1/sub2');
+
+		$fileInfo = $view->getFileInfo('files/test/sub1');
+		$fileId = $fileInfo->getId();
+
+		$this->assertTrue(
+			OCP\Share::shareItem('folder', $fileId, OCP\Share::SHARE_TYPE_GROUP, $this->group1, \OCP\Constants::PERMISSION_READ + \OCP\Constants::PERMISSION_CREATE),
+			'Failed asserting that user 1 successfully shared "test/sub1" with group 1.'
+		);
+
+		$result = OCP\Share::getItemShared('folder', $fileId, Test_Share_Backend::FORMAT_SOURCE);
+		$this->assertNotEmpty($result);
+		$this->assertEquals(\OCP\Constants::PERMISSION_READ + \OCP\Constants::PERMISSION_CREATE, $result['permissions']);
+
+		$fileInfo = $view->getFileInfo('files/test/sub1/sub2');
+		$fileId = $fileInfo->getId();
+
+		$this->assertTrue(
+			OCP\Share::shareItem('folder', $fileId, OCP\Share::SHARE_TYPE_USER, $this->user4, \OCP\Constants::PERMISSION_READ),
+			'Failed asserting that user 1 successfully shared "test/sub1/sub2" with user 4.'
+		);
+
+		$result = OCP\Share::getItemShared('folder', $fileId, Test_Share_Backend::FORMAT_SOURCE);
+		$this->assertNotEmpty($result);
+		$this->assertEquals(\OCP\Constants::PERMISSION_READ, $result['permissions']);
+	}
+
 	protected function shareUserOneTestFileWithGroupOne() {
 		OC_User::setUserId($this->user1);
 		$this->assertTrue(
@@ -760,6 +798,7 @@ class Test_Share extends \Test\TestCase {
 
 	/**
 	 * @param boolean|string $token
+	 * @return array
 	 */
 	protected function getShareByValidToken($token) {
 		$row = OCP\Share::getShareByToken($token);
@@ -1012,7 +1051,7 @@ class Test_Share extends \Test\TestCase {
 	 */
 	function testRemoveProtocolFromUrl($url, $expectedResult) {
 		$share = new \OC\Share\Share();
-		$result = \Test_Helper::invokePrivate($share, 'removeProtocolFromUrl', array($url));
+		$result = self::invokePrivate($share, 'removeProtocolFromUrl', array($url));
 		$this->assertSame($expectedResult, $result);
 	}
 
@@ -1024,10 +1063,58 @@ class Test_Share extends \Test\TestCase {
 		);
 	}
 
+	public function dataRemoteShareUrlCalls() {
+		return [
+			['admin@localhost', 'localhost'],
+			['admin@https://localhost', 'localhost'],
+			['admin@http://localhost', 'localhost'],
+			['admin@localhost/subFolder', 'localhost/subFolder'],
+		];
+	}
+
+	/**
+	 * @dataProvider dataRemoteShareUrlCalls
+	 *
+	 * @param string $shareWith
+	 * @param string $urlHost
+	 */
+	public function testRemoteShareUrlCalls($shareWith, $urlHost) {
+		$oldHttpHelper = \OC::$server->query('HTTPHelper');
+		$httpHelperMock = $this->getMockBuilder('OC\HttpHelper')
+			->disableOriginalConstructor()
+			->getMock();
+		$this->setHttpHelper($httpHelperMock);
+
+		$httpHelperMock->expects($this->at(0))
+			->method('post')
+			->with($this->stringStartsWith('https://' . $urlHost . '/ocs/v1.php/cloud/shares'), $this->anything())
+			->willReturn(['success' => false, 'result' => 'Exception']);
+		$httpHelperMock->expects($this->at(1))
+			->method('post')
+			->with($this->stringStartsWith('http://' . $urlHost . '/ocs/v1.php/cloud/shares'), $this->anything())
+			->willReturn(['success' => true, 'result' => json_encode(['ocs' => ['meta' => ['statuscode' => 100]]])]);
+
+		\OCP\Share::shareItem('test', 'test.txt', \OCP\Share::SHARE_TYPE_REMOTE, $shareWith, \OCP\Constants::PERMISSION_READ);
+		$shares = \OCP\Share::getItemShared('test', 'test.txt');
+		$share = array_shift($shares);
+
+		$httpHelperMock->expects($this->at(0))
+			->method('post')
+			->with($this->stringStartsWith('https://' . $urlHost . '/ocs/v1.php/cloud/shares/' . $share['id'] . '/unshare'), $this->anything())
+			->willReturn(['success' => false, 'result' => 'Exception']);
+		$httpHelperMock->expects($this->at(1))
+			->method('post')
+			->with($this->stringStartsWith('http://' . $urlHost . '/ocs/v1.php/cloud/shares/' . $share['id'] . '/unshare'), $this->anything())
+			->willReturn(['success' => true, 'result' => json_encode(['ocs' => ['meta' => ['statuscode' => 100]]])]);
+
+		\OCP\Share::unshare('test', 'test.txt', \OCP\Share::SHARE_TYPE_REMOTE, $shareWith);
+		$this->setHttpHelper($oldHttpHelper);
+	}
+
 	/**
 	 * @dataProvider dataProviderTestGroupItems
-	 * @param type $ungrouped
-	 * @param type $grouped
+	 * @param array $ungrouped
+	 * @param array $grouped
 	 */
 	function testGroupItems($ungrouped, $grouped) {
 
@@ -1156,6 +1243,52 @@ class Test_Share extends \Test\TestCase {
 		               ->getMock();
 
 		\OC\Share\Share::setPassword($userSession, $connection, $config, 1, 'pass');
+	}
+
+	public function testPasswords() {
+		$pass = 'secret';
+
+		$this->shareUserTestFileAsLink();
+
+		$userSession = \OC::$server->getUserSession();
+		$connection = \OC::$server->getDatabaseConnection();
+		$config = $this->getMockBuilder('\OCP\IConfig')
+		               ->disableOriginalConstructor()
+		               ->getMock();
+
+		// Find the share ID in the db
+		$qb = $connection->createQueryBuilder();
+		$qb->select('`id`')
+		   ->from('`*PREFIX*share`')
+		   ->where('`item_type` = :type')
+		   ->andWhere('`item_source` = :source')
+		   ->andWhere('`uid_owner` = :owner')
+		   ->andWhere('`share_type` = :share_type')
+		   ->setParameter('type', 'test')
+		   ->setParameter('source', 'test.txt')
+		   ->setParameter('owner', $this->user1)
+		   ->setParameter('share_type', \OCP\Share::SHARE_TYPE_LINK);
+
+		$res = $qb->execute()->fetchAll();
+		$this->assertCount(1, $res);
+		$id = $res[0]['id'];
+
+		// Set password on share
+		$res = \OC\Share\Share::setPassword($userSession, $connection, $config, $id, $pass);
+		$this->assertTrue($res);
+
+		// Fetch the hash from the database
+		$qb = $connection->createQueryBuilder();
+		$qb->select('`share_with`')
+		   ->from('`*PREFIX*share`')
+		   ->where('`id` = :id')
+		   ->setParameter('id', $id);
+		$hash = $qb->execute()->fetch()['share_with'];
+
+		$hasher = \OC::$server->getHasher();
+
+		// Verify hash
+		$this->assertTrue($hasher->verify($pass, $hash));
 	}
 
 	/**

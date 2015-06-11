@@ -52,12 +52,18 @@ class Application extends \OCP\AppFramework\App {
 
 	/**
 	 * @param array $urlParams
+	 * @param bool $encryptionSystemReady
 	 */
-	public function __construct($urlParams = array()) {
+	public function __construct($urlParams = array(), $encryptionSystemReady = true) {
 		parent::__construct('encryption', $urlParams);
 		$this->encryptionManager = \OC::$server->getEncryptionManager();
 		$this->config = \OC::$server->getConfig();
 		$this->registerServices();
+		if($encryptionSystemReady === false) {
+			/** @var Session $session */
+			$session = $this->getContainer()->query('Session');
+			$session->setStatus(Session::RUN_MIGRATION);
+		}
 	}
 
 	/**
@@ -94,16 +100,21 @@ class Application extends \OCP\AppFramework\App {
 	public function registerEncryptionModule() {
 		$container = $this->getContainer();
 
+
 		$this->encryptionManager->registerEncryptionModule(
 			Encryption::ID,
 			Encryption::DISPLAY_NAME,
 			function() use ($container) {
+
 			return new Encryption(
 				$container->query('Crypt'),
 				$container->query('KeyManager'),
-				$container->query('Util')
+				$container->query('Util'),
+				$container->getServer()->getLogger(),
+				$container->getServer()->getL10N($container->getAppName())
 			);
 		});
+
 	}
 
 	public function registerServices() {
@@ -205,7 +216,8 @@ class Application extends \OCP\AppFramework\App {
 					$c->query('Crypt'),
 					$server->getLogger(),
 					$server->getUserSession(),
-					$server->getConfig());
+					$server->getConfig(),
+					$server->getUserManager());
 			});
 
 	}

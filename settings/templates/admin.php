@@ -7,6 +7,7 @@
 /**
  * @var array $_
  * @var \OCP\IL10N $l
+ * @var OC_Defaults $theme
  */
 
 style('settings', 'settings');
@@ -15,32 +16,32 @@ script('core', ['multiselect', 'setupchecks']);
 vendor_script('select2/select2');
 vendor_style('select2/select2');
 
-$levels = array('Debug', 'Info', 'Warning', 'Error', 'Fatal');
-$levelLabels = array(
+$levels = ['Debug', 'Info', 'Warning', 'Error', 'Fatal'];
+$levelLabels = [
 	$l->t( 'Everything (fatal issues, errors, warnings, info, debug)' ),
 	$l->t( 'Info, warnings, errors and fatal issues' ),
 	$l->t( 'Warnings, errors and fatal issues' ),
 	$l->t( 'Errors and fatal issues' ),
 	$l->t( 'Fatal issues only' ),
-);
+];
 
-$mail_smtpauthtype = array(
+$mail_smtpauthtype = [
 	''	=> $l->t('None'),
 	'LOGIN'	=> $l->t('Login'),
 	'PLAIN'	=> $l->t('Plain'),
 	'NTLM'	=> $l->t('NT LAN Manager'),
-);
+];
 
-$mail_smtpsecure = array(
+$mail_smtpsecure = [
 	''		=> $l->t('None'),
 	'ssl'	=> $l->t('SSL'),
 	'tls'	=> $l->t('TLS'),
-);
+];
 
-$mail_smtpmode = array(
+$mail_smtpmode = [
 	'php',
 	'smtp',
-);
+];
 if ($_['sendmail_is_available']) {
 	$mail_smtpmode[] = 'sendmail';
 }
@@ -105,11 +106,11 @@ if ($_['WindowsWarning']) {
 <?php
 }
 
-// APCU Warning if outdated
-if ($_['ApcuOutdatedWarning']) {
+// Warning if memcache is outdated
+foreach ($_['OutdatedCacheWarning'] as $php_module => $data) {
 	?>
 	<li>
-		<?php p($l->t('APCu below version 4.0.6 is installed, for stability and performance reasons we recommend to update to a newer APCu version.')); ?>
+		<?php p($l->t('%1$s below version %2$s is installed, for stability and performance reasons we recommend to update to a newer %1$s version.', $data)); ?>
 	</li>
 <?php
 }
@@ -137,7 +138,7 @@ if (!$_['isLocaleWorking']) {
 		?>
 			<br>
 			<?php
-			p($l->t('We strongly suggest installing the required packages on your system to support one of the following locales: %s.', array($locales)));
+			p($l->t('We strongly suggest installing the required packages on your system to support one of the following locales: %s.', [$locales]));
 			?>
 	</li>
 <?php
@@ -158,9 +159,7 @@ if ($_['cronErrors']) {
 			<br>
 			<ol>
 				<?php foreach(json_decode($_['cronErrors']) as $error) { if(isset($error->error)) {?>
-					<li><?php p($error->error) ?></li>
-					<ul><li><?php p($error->hint) ?></li></ul>
-
+					<li><?php p($error->error) ?> <?php p($error->hint) ?></li>
 				<?php }};?>
 			</ol>
 	</li>
@@ -180,6 +179,9 @@ if ($_['cronErrors']) {
 
 	<div class="section" id="shareAPI">
 		<h2><?php p($l->t('Sharing'));?></h2>
+		<a target="_blank" class="icon-info svg"
+			title="<?php p($l->t('Open documentation'));?>"
+			href="<?php p(link_to_docs('admin-sharing')); ?>"></a>
 		<p id="enable">
 			<input type="checkbox" name="shareapi_enabled" id="shareAPIEnabled"
 				   value="1" <?php if ($_['shareAPIEnabled'] === 'yes') print_unescaped('checked="checked"'); ?> />
@@ -265,12 +267,12 @@ if ($_['cronErrors']) {
 			if (time() - $_['lastcron'] <= 3600): ?>
 				<span class="cronstatus success"></span>
 				<span class="crondate" original-title="<?php p($absolute_time);?>">
-					<?php p($l->t("Last cron job execution: %s.", array($relative_time)));?>
+					<?php p($l->t("Last cron job execution: %s.", [$relative_time]));?>
 				</span>
 			<?php else: ?>
 				<span class="cronstatus error"></span>
 				<span class="crondate" original-title="<?php p($absolute_time);?>">
-					<?php p($l->t("Last cron job execution: %s. Something seems wrong.", array($relative_time)));?>
+					<?php p($l->t("Last cron job execution: %s. Something seems wrong.", [$relative_time]));?>
 				</span>
 			<?php endif;
 		else: ?>
@@ -310,23 +312,33 @@ if ($_['cronErrors']) {
 </div>
 
 <div class="section" id='encryptionAPI'>
-	<h2><?php p($l->t('Server-side encryption')); ?> </h2>
+	<h2><?php p($l->t('Server-side encryption')); ?></h2>
+	<a target="_blank" class="icon-info svg"
+		title="<?php p($l->t('Open documentation'));?>"
+		href="<?php p(link_to_docs('admin-encryption')); ?>"></a>
 
 	<p id="enable">
-		<input type="checkbox" name="encryption_enabled"
-			   id="encryptionEnabled"
-			   value="1" <?php if ($_['encryptionEnabled']) print_unescaped('checked="checked"'); ?> />
+		<input type="checkbox"
+			   id="enableEncryption"
+			   value="1" <?php if ($_['encryptionEnabled']) print_unescaped('checked="checked" disabled="disabled"'); ?> />
 		<label
-			for="encryptionEnabled"><?php p($l->t('Enable server-side encryption')); ?> <span id="startmigration_msg" class="msg"></span> </label><br/>
+			for="enableEncryption"><?php p($l->t('Enable server-side encryption')); ?> <span id="startmigration_msg" class="msg"></span> </label><br/>
 	</p>
+
+	<div id="EncryptionWarning" class="warning hidden">
+		<?php p($l->t('Encryption is a one way process. Once encryption is enabled, all files from that point forward will be encrypted on the server and it will not be possible to disable encryption at a later date. This is the final warning: Do you really want to enable encryption?')) ?>
+		<input type="button"
+			   id="reallyEnableEncryption"
+			   value="<?php p($l->t("Enable encryption")); ?>" />
+	</div>
 
 	<div id="EncryptionSettingsArea" class="<?php if (!$_['encryptionEnabled']) p('hidden'); ?>">
 		<div id='selectEncryptionModules' class="<?php if (!$_['encryptionReady']) p('hidden'); ?>">
 			<?php
 			if (empty($_['encryptionModules'])) {
-				p('No encryption module loaded, please load a encryption module in the app menu');
+				p($l->t('No encryption module loaded, please enable an encryption module in the app menu.'));
 			} else { ?>
-				<h3>Select default encryption module:</h3>
+				<h3><?php p($l->t('Select default encryption module:')) ?></h3>
 				<fieldset id='encryptionModules'>
 					<?php foreach ($_['encryptionModules'] as $id => $module): ?>
 						<input type="radio" id="<?php p($id) ?>"
@@ -338,6 +350,8 @@ if ($_['cronErrors']) {
 						<label
 							for="<?php p($id) ?>"><?php p($module['displayName']) ?></label>
 						<br/>
+
+						<?php if ($id === 'OC_DEFAULT_MODULE') print_unescaped($_['ocDefaultEncryptionModulePanel']); ?>
 					<?php endforeach; ?>
 				</fieldset>
 			<?php } ?>
@@ -345,10 +359,9 @@ if ($_['cronErrors']) {
 		<div id="migrationWarning" class="<?php if ($_['encryptionReady']) p('hidden'); ?>">
 			<?php
 			if ($_['encryptionReady'] === false && $_['externalBackendsEnabled'] === true) {
-				p('You need to migrate your encryption keys from the old encryption (ownCloud <= 8.0) to the new one. '
-					. 'Please enable the "ownCloud Default Encryption Module" and run \'occ encryption:migrate\'');
+				p($l->t('You need to migrate your encryption keys from the old encryption (ownCloud <= 8.0) to the new one. Please enable the "Default encryption module" and run \'occ encryption:migrate\''));
 			} elseif ($_['encryptionReady'] === false && $_['externalBackendsEnabled'] === false) {
-				p('You need to migrate your encryption keys from the old encryption (ownCloud <= 8.0) to the new one.'); ?>
+				p($l->t('You need to migrate your encryption keys from the old encryption (ownCloud <= 8.0) to the new one.')); ?>
 				<input type="submit" name="startmigration" id="startmigration"
 					   value="<?php p($l->t('Start migration')); ?>"/>
 			<?php } ?>
@@ -359,6 +372,9 @@ if ($_['cronErrors']) {
 <div class="section" id="mail_general_settings">
 	<form id="mail_general_settings_form" class="mail_settings">
 		<h2><?php p($l->t('Email server'));?></h2>
+		<a target="_blank" class="icon-info svg"
+			title="<?php p($l->t('Open documentation'));?>"
+			href="<?php p(link_to_docs('admin-email')); ?>"></a>
 
 		<p><?php p($l->t('This is used for sending out notifications.')); ?> <span id="mail_settings_msg" class="msg"></span></p>
 
@@ -510,6 +526,18 @@ if ($_['cronErrors']) {
 		<li><a target="_blank" href="<?php p(link_to_docs('admin-config')); ?>"><?php p($l->t('Improving the config.php'));?> ↗</a></li>
 		<li><a target="_blank" href="<?php p(link_to_docs('developer-theming')); ?>"><?php p($l->t('Theming'));?> ↗</a></li>
 		<li><a target="_blank" href="<?php p(link_to_docs('admin-security')); ?>"><?php p($l->t('Hardening and security guidance'));?> ↗</a></li>
+	</ul>
+</div>
+<div class="section" id="server-status">
+	<h2><?php p($l->t('Server Status'));?></h2>
+	<ul>
+		<li>
+			<?php if ($_['fileLockingEnabled']) {
+				p($l->t('Experimental File Lock is enabled.'));
+			} else {
+				p($l->t('Experimental File Lock is disabled.'));
+			} ?>
+		</li>
 	</ul>
 </div>
 

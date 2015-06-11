@@ -116,7 +116,14 @@ li.active span.utils .delete:hover, li.active .rename:hover { opacity: 1; }
 span.utils .delete, .rename { display: none; }
 #app-navigation ul li.active > span.utils .delete,
 #app-navigation ul li.active > span.utils .rename { display: block; }
-#usersearchform { position: absolute; top: 2px; right: 250px; }
+#usersearchform {
+	position: absolute;
+	top: 2px;
+	right: 0;
+}
+#usersearchform input {
+	width: 150px;
+}
 #usersearchform label { font-weight: 700; }
 
 /* display table at full width */
@@ -368,8 +375,15 @@ table.grid td.date{
 	display: inline-block;
 }
 
+/* correctly display help icons next to headings */
 .icon-info {
 	padding: 11px 20px;
+	vertical-align: text-bottom;
+}
+#shareAPI h2,
+#encryptionAPI h2,
+#mail_general_settings h2 {
+	display: inline-block;
 }
 
 .mail_settings p label:first-child {
@@ -486,4 +500,8 @@ doesnotexist:-o-prefocus, .strengthify-wrapper {
 
 #encryptionModules {
 	padding: 10px;
+}
+
+#warning {
+	color: red;
 }

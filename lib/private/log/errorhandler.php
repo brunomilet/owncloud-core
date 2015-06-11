@@ -23,10 +23,10 @@
 
 namespace OC\Log;
 
-use OC\Log as LoggerInterface;
+use OCP\ILogger;
 
 class ErrorHandler {
-	/** @var LoggerInterface */
+	/** @var ILogger */
 	private static $logger;
 
 	/**
@@ -50,7 +50,7 @@ class ErrorHandler {
 		set_exception_handler(array($handler, 'onException'));
 	}
 
-	public static function setLogger(LoggerInterface $logger) {
+	public static function setLogger(ILogger $logger) {
 		self::$logger = $logger;
 	}
 
@@ -64,10 +64,16 @@ class ErrorHandler {
 		}
 	}
 
-	// Uncaught exception handler
+	/**
+	 * 	Uncaught exception handler
+	 *
+	 * @param \Exception $exception
+	 */
 	public static function onException($exception) {
-		$msg = $exception->getMessage() . ' at ' . $exception->getFile() . '#' . $exception->getLine();
-		self::$logger->critical(self::removePassword($msg), array('app' => 'PHP'));
+		$class = get_class($exception);
+		$msg = $exception->getMessage();
+		$msg = "$class: $msg at " . $exception->getFile() . '#' . $exception->getLine();
+		self::$logger->critical(self::removePassword($msg), ['app' => 'PHP']);
 	}
 
 	//Recoverable errors handler

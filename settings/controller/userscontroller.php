@@ -122,10 +122,10 @@ class UsersController extends Controller {
 		$this->subAdminFactory = $subAdminFactory;
 
 		// check for encryption state - TODO see formatUserForIndex
-		$this->isEncryptionAppEnabled = $appManager->isEnabledForUser('files_encryption');
+		$this->isEncryptionAppEnabled = $appManager->isEnabledForUser('encryption');
 		if($this->isEncryptionAppEnabled) {
 			// putting this directly in empty is possible in PHP 5.5+
-			$result = $config->getAppValue('files_encryption', 'recoveryAdminEnabled', 0);
+			$result = $config->getAppValue('encryption', 'recoveryAdminEnabled', 0);
 			$this->isRestoreEnabled = !empty($result);
 		}
 	}
@@ -148,7 +148,7 @@ class UsersController extends Controller {
 		if ($this->isEncryptionAppEnabled) {
 			if ($this->isRestoreEnabled) {
 				// check for the users recovery setting
-				$recoveryMode = $this->config->getUserValue($user->getUID(), 'files_encryption', 'recovery_enabled', '0');
+				$recoveryMode = $this->config->getUserValue($user->getUID(), 'encryption', 'recoveryEnabled', '0');
 				// method call inside empty is possible with PHP 5.5+
 				$recoveryModeEnabled = !empty($recoveryMode);
 				if ($recoveryModeEnabled) {
@@ -504,7 +504,12 @@ class UsersController extends Controller {
 			);
 		}
 
-		$this->config->setUserValue($id, 'settings', 'email', $mailAddress);
+		// delete user value if email address is empty
+		if($mailAddress === '') {
+			$this->config->deleteUserValue($id, 'settings', 'email');
+		} else {
+			$this->config->setUserValue($id, 'settings', 'email', $mailAddress);
+		}
 
 		return new DataResponse(
 			array(

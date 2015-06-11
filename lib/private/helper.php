@@ -394,6 +394,9 @@ class OC_Helper {
 	 */
 	public static function computerFileSize($str) {
 		$str = strtolower($str);
+		if (is_numeric($str)) {
+			return $str;
+		}
 
 		$bytes_array = array(
 			'b' => 1,
@@ -413,6 +416,8 @@ class OC_Helper {
 
 		if (preg_match('#([kmgtp]?b?)$#si', $str, $matches) && !empty($bytes_array[$matches[1]])) {
 			$bytes *= $bytes_array[$matches[1]];
+		} else {
+			return false;
 		}
 
 		$bytes = round($bytes);
@@ -1003,7 +1008,21 @@ class OC_Helper {
 			$relative = 0;
 		}
 
-		return array('free' => $free, 'used' => $used, 'total' => $total, 'relative' => $relative);
+		$ownerId = $storage->getOwner($path);
+		$ownerDisplayName = '';
+		$owner = \OC::$server->getUserManager()->get($ownerId);
+		if($owner) {
+			$ownerDisplayName = $owner->getDisplayName();
+		}
+
+		return [
+			'free' => $free,
+			'used' => $used,
+			'total' => $total,
+			'relative' => $relative,
+			'owner' => $ownerId,
+			'ownerDisplayName' => $ownerDisplayName,
+		];
 	}
 
 	/**

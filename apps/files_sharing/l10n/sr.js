@@ -52,13 +52,15 @@ OC.L10N.register(
     "the link expired" : "веза је истекла",
     "sharing is disabled" : "дељење је искључено",
     "For more info, please ask the person who sent this link." : "За више информација, питајте особу која вам је послала везу.",
-    "Add to your ownCloud" : "Додај у свој оунКлауд",
+    "Add to your ownCloud" : "Додај у свој облак",
     "Download" : "Преузми",
     "Download %s" : "Преузми %s",
     "Direct link" : "Директна веза",
     "Federated Cloud Sharing" : "Здружено дељење у облаку",
     "Open documentation" : "Отвори документацију",
     "Allow users on this server to send shares to other servers" : "Дозвољава корисницима овог сервера да шаљу дељења на друге сервере",
-    "Allow users on this server to receive shares from other servers" : "Дозвољава корисницима овог сервера да примају дељења са других сервера"
+    "Allow users on this server to receive shares from other servers" : "Дозвољава корисницима овог сервера да примају дељења са других сервера",
+    "Federated Cloud" : "Здружени облак",
+    "Your Federated Cloud ID: %s" : "ИД вашег здруженог облака: %s"
 },
 "nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);");

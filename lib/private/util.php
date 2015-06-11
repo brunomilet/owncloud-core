@@ -189,9 +189,6 @@ class OC_Util {
 			//jail the user into his "home" directory
 			\OC\Files\Filesystem::init($user, $userDir);
 
-			//trigger creation of user home and /files folder
-			\OC::$server->getUserFolder($user);
-
 			OC_Hook::emit('OC_Filesystem', 'setup', array('user' => $user, 'user_dir' => $userDir));
 		}
 		\OC::$server->getEventLogger()->end('setup_fs');
@@ -388,10 +385,24 @@ class OC_Util {
 			$session->set('OC_Version', $OC_Version);
 			/** @var $OC_VersionString string */
 			$session->set('OC_VersionString', $OC_VersionString);
-			/** @var $OC_Channel string */
-			$session->set('OC_Channel', $OC_Channel);
 			/** @var $OC_Build string */
 			$session->set('OC_Build', $OC_Build);
+			
+			// Allow overriding update channel
+			
+			if (\OC::$server->getSystemConfig()->getValue('installed', false)) {
+				$channel = \OC::$server->getAppConfig()->getValue('core', 'OC_Channel');
+			} else {
+				/** @var $OC_Channel string */
+				$channel = $OC_Channel;
+			}
+			
+			if (!is_null($channel)) {
+				$session->set('OC_Channel', $channel);
+			} else {
+				/** @var $OC_Channel string */
+				$session->set('OC_Channel', $OC_Channel);
+			}
 		}
 	}
 
@@ -671,8 +682,6 @@ class OC_Util {
 				'PDO::ATTR_DRIVER_NAME' => 'PDO'
 			),
 			'ini' => [
-				'mbstring.func_overload' => 0,
-				'output_buffering' => false,
 				'default_charset' => 'UTF-8',
 			],
 		);
@@ -686,6 +695,7 @@ class OC_Util {
 		 *        approach to check for these values we should re-enable those
 		 *        checks.
 		 */
+		$iniWrapper = \OC::$server->getIniWrapper();
 		if (!self::runningOnHhvm()) {
 			foreach ($dependencies['classes'] as $class => $module) {
 				if (!class_exists($class)) {
@@ -703,7 +713,6 @@ class OC_Util {
 				}
 			}
 			foreach ($dependencies['ini'] as $setting => $expected) {
-				$iniWrapper = \OC::$server->getIniWrapper();
 				if (is_bool($expected)) {
 					if ($iniWrapper->getBool($setting) !== $expected) {
 						$invalidIniSettings[] = [$setting, $expected];
@@ -740,37 +749,25 @@ class OC_Util {
 			$webServerRestart = true;
 		}
 
-		if (version_compare(phpversion(), '5.4.0', '<')) {
-			$errors[] = array(
-				'error' => $l->t('PHP %s or higher is required.', '5.4.0'),
-				'hint' => $l->t('Please ask your server administrator to update PHP to the latest version.'
-					. ' Your PHP version is no longer supported by ownCloud and the PHP community.')
-			);
-			$webServerRestart = true;
-		}
-
 		/**
-		 * PHP 5.6 ships with a PHP setting which throws notices by default for a
-		 * lot of endpoints. Thus we need to ensure that the value is set to -1
+		 * The mbstring.func_overload check can only be performed if the mbstring
+		 * module is installed as it will return null if the checking setting is
+		 * not available and thus a check on the boolean value fails.
 		 *
-		 * FIXME: Due to https://github.com/owncloud/core/pull/13593#issuecomment-71178078
-		 * this check is disabled for HHVM at the moment. This should get re-evaluated
-		 * at a later point.
-		 *
-		 * @link https://github.com/owncloud/core/issues/13592
+		 * TODO: Should probably be implemented in the above generic dependency
+		 *       check somehow in the long-term.
 		 */
-		if(version_compare(phpversion(), '5.6.0', '>=') &&
-			!self::runningOnHhvm() &&
-			\OC::$server->getIniWrapper()->getNumeric('always_populate_raw_post_data') !== -1) {
+		if($iniWrapper->getBool('mbstring.func_overload') !== null &&
+			$iniWrapper->getBool('mbstring.func_overload') === true) {
 			$errors[] = array(
-				'error' => $l->t('PHP is configured to populate raw post data. Since PHP 5.6 this will lead to PHP throwing notices for perfectly valid code.'),
-				'hint' => $l->t('To fix this issue set <code>always_populate_raw_post_data</code> to <code>-1</code> in your php.ini')
+				'error' => $l->t('mbstring.func_overload is set to "%s" instead of the expected value "0"', [$iniWrapper->getString('mbstring.func_overload')]),
+				'hint' => $l->t('To fix this issue set <code>mbstring.func_overload</code> to <code>0</code> in your php.ini')
 			);
 		}
 
 		if (!self::isAnnotationsWorking()) {
 			$errors[] = array(
-				'error' => $l->t('PHP is apparently setup to strip inline doc blocks. This will make several core apps inaccessible.'),
+				'error' => $l->t('PHP is apparently set up to strip inline doc blocks. This will make several core apps inaccessible.'),
 				'hint' => $l->t('This is probably caused by a cache/accelerator such as Zend OPcache or eAccelerator.')
 			);
 		}
@@ -1349,7 +1346,7 @@ class OC_Util {
 			if (ini_get('xcache.admin.enable_auth')) {
 				OC_Log::write('core', 'XCache opcode cache will not be cleared because "xcache.admin.enable_auth" is enabled.', \OC_Log::WARN);
 			} else {
-				xcache_clear_cache(XC_TYPE_PHP, 0);
+				@xcache_clear_cache(XC_TYPE_PHP, 0);
 			}
 		}
 		// Opcache (PHP >= 5.5)

@@ -26,11 +26,13 @@ use OC\Encryption\Exceptions\ModuleDoesNotExistsException;
 use OC\Encryption\Update;
 use OC\Encryption\Util;
 use OC\Files\Filesystem;
+use OC\Files\Mount\Manager;
 use OC\Files\Storage\LocalTempFileTrait;
 use OCP\Encryption\IFile;
 use OCP\Encryption\IManager;
 use OCP\Encryption\Keys\IStorage;
 use OCP\Files\Mount\IMountPoint;
+use OCP\Files\Storage;
 use OCP\ILogger;
 
 class Encryption extends Wrapper {
@@ -61,21 +63,26 @@ class Encryption extends Wrapper {
 	/** @var IMountPoint */
 	private $mount;
 
-	/** @var \OCP\Encryption\Keys\IStorage */
+
+	/** @var IStorage */
 	private $keyStorage;
 
-	/** @var \OC\Encryption\Update */
+	/** @var Update */
 	private $update;
+
+	/** @var Manager */
+	private $mountManager;
 
 	/**
 	 * @param array $parameters
-	 * @param \OCP\Encryption\IManager $encryptionManager
-	 * @param \OC\Encryption\Util $util
-	 * @param \OCP\ILogger $logger
-	 * @param \OCP\Encryption\IFile $fileHelper
-	 * @param string $uid user who perform the read/write operation (null for public access)
+	 * @param IManager $encryptionManager
+	 * @param Util $util
+	 * @param ILogger $logger
+	 * @param IFile $fileHelper
+	 * @param string $uid
 	 * @param IStorage $keyStorage
 	 * @param Update $update
+	 * @param Manager $mountManager
 	 */
 	public function __construct(
 			$parameters,
@@ -85,9 +92,10 @@ class Encryption extends Wrapper {
 			IFile $fileHelper = null,
 			$uid = null,
 			IStorage $keyStorage = null,
-			Update $update = null
+			Update $update = null,
+			Manager $mountManager = null
 		) {
-
+		
 		$this->mountPoint = $parameters['mountPoint'];
 		$this->mount = $parameters['mount'];
 		$this->encryptionManager = $encryptionManager;
@@ -98,6 +106,7 @@ class Encryption extends Wrapper {
 		$this->keyStorage = $keyStorage;
 		$this->unencryptedSize = array();
 		$this->update = $update;
+		$this->mountManager = $mountManager;
 		parent::__construct($parameters);
 	}
 
@@ -205,8 +214,7 @@ class Encryption extends Wrapper {
 
 		$encryptionModule = $this->getEncryptionModule($path);
 		if ($encryptionModule) {
-			$this->keyStorage->deleteAllFileKeys($this->getFullPath($path),
-				$encryptionModule->getId());
+			$this->keyStorage->deleteAllFileKeys($this->getFullPath($path));
 		}
 
 		return $this->storage->unlink($path);
@@ -220,27 +228,64 @@ class Encryption extends Wrapper {
 	 * @return bool
 	 */
 	public function rename($path1, $path2) {
-		$source = $this->getFullPath($path1);
-		if ($this->util->isExcluded($source)) {
-			return $this->storage->rename($path1, $path2);
-		}
 
 		$result = $this->storage->rename($path1, $path2);
-		if ($result) {
-			$target = $this->getFullPath($path2);
-			if (isset($this->unencryptedSize[$source])) {
-				$this->unencryptedSize[$target] = $this->unencryptedSize[$source];
-			}
-			$keysRenamed = $this->keyStorage->renameKeys($source, $target);
-			if ($keysRenamed &&
-				dirname($source) !== dirname($target) &&
-				$this->util->isFile($target)
-			) {
-				$this->update->update($target);
+
+		if ($result && $this->encryptionManager->isEnabled()) {
+			$source = $this->getFullPath($path1);
+			if (!$this->util->isExcluded($source)) {
+				$target = $this->getFullPath($path2);
+				if (isset($this->unencryptedSize[$source])) {
+					$this->unencryptedSize[$target] = $this->unencryptedSize[$source];
+				}
+				$this->keyStorage->renameKeys($source, $target);
 			}
 		}
 
 		return $result;
+	}
+
+	/**
+	 * see http://php.net/manual/en/function.rmdir.php
+	 *
+	 * @param string $path
+	 * @return bool
+	 */
+	public function rmdir($path) {
+		$result = $this->storage->rmdir($path);
+		$fullPath = $this->getFullPath($path);
+		if ($result &&
+			$this->util->isExcluded($fullPath) === false &&
+			$this->encryptionManager->isEnabled()
+		) {
+			$this->keyStorage->deleteAllFileKeys($fullPath);
+		}
+
+		return $result;
+	}
+
+	/**
+	 * check if a file can be read
+	 *
+	 * @param string $path
+	 * @return bool
+	 */
+	public function isReadable($path) {
+
+		$isReadable = true;
+
+		$metaData = $this->getMetaData($path);
+		if (
+			!$this->is_dir($path) &&
+			isset($metaData['encrypted']) &&
+			$metaData['encrypted'] === true
+		) {
+			$fullPath = $this->getFullPath($path);
+			$module = $this->getEncryptionModule($path);
+			$isReadable = $module->isReadable($fullPath, $this->uid);
+		}
+
+		return $this->storage->isReadable($path) && $isReadable;
 	}
 
 	/**
@@ -251,21 +296,33 @@ class Encryption extends Wrapper {
 	 * @return bool
 	 */
 	public function copy($path1, $path2) {
-		$fullPath1 = $this->getFullPath($path1);
-		if ($this->util->isExcluded($fullPath1)) {
+
+		$source = $this->getFullPath($path1);
+		$target = $this->getFullPath($path2);
+
+		if ($this->util->isExcluded($source)) {
 			return $this->storage->copy($path1, $path2);
 		}
 
-		$source = $this->getFullPath($path1);
 		$result = $this->storage->copy($path1, $path2);
-		if ($result) {
-			$target = $this->getFullPath($path2);
-			$keysCopied = $this->keyStorage->copyKeys($source, $target);
+
+		if ($result && $this->encryptionManager->isEnabled()) {
+			$keysCopied = $this->copyKeys($source, $target);
+
 			if ($keysCopied &&
 				dirname($source) !== dirname($target) &&
 				$this->util->isFile($target)
 			) {
 				$this->update->update($target);
+			}
+
+			$data = $this->getMetaData($path1);
+
+			if (isset($data['encrypted'])) {
+				$this->getCache()->put($path2, ['encrypted' => $data['encrypted']]);
+			}
+			if (isset($data['size'])) {
+				$this->updateUnencryptedSize($target, $data['size']);
 			}
 		}
 
@@ -289,71 +346,185 @@ class Encryption extends Wrapper {
 		$fullPath = $this->getFullPath($path);
 		$encryptionModuleId = $this->util->getEncryptionModuleId($header);
 
-		$size = $unencryptedSize = 0;
-		$targetExists = $this->file_exists($path);
-		$targetIsEncrypted = false;
-		if ($targetExists) {
-			// in case the file exists we require the explicit module as
-			// specified in the file header - otherwise we need to fail hard to
-			// prevent data loss on client side
-			if (!empty($encryptionModuleId)) {
-				$targetIsEncrypted = true;
-				$encryptionModule = $this->encryptionManager->getEncryptionModule($encryptionModuleId);
+		if ($this->util->isExcluded($fullPath) === false) {
+
+			$size = $unencryptedSize = 0;
+			$targetExists = $this->file_exists($path);
+			$targetIsEncrypted = false;
+			if ($targetExists) {
+				// in case the file exists we require the explicit module as
+				// specified in the file header - otherwise we need to fail hard to
+				// prevent data loss on client side
+				if (!empty($encryptionModuleId)) {
+					$targetIsEncrypted = true;
+					$encryptionModule = $this->encryptionManager->getEncryptionModule($encryptionModuleId);
+				}
+
+				$size = $this->storage->filesize($path);
+				$unencryptedSize = $this->filesize($path);
 			}
 
-			$size = $this->storage->filesize($path);
-			$unencryptedSize = $this->filesize($path);
+			try {
+
+				if (
+					$mode === 'w'
+					|| $mode === 'w+'
+					|| $mode === 'wb'
+					|| $mode === 'wb+'
+				) {
+					if ($encryptionEnabled) {
+						// if $encryptionModuleId is empty, the default module will be used
+						$encryptionModule = $this->encryptionManager->getEncryptionModule($encryptionModuleId);
+						$shouldEncrypt = $encryptionModule->shouldEncrypt($fullPath);
+					}
+				} else {
+					$info = $this->getCache()->get($path);
+					// only get encryption module if we found one in the header
+					// or if file should be encrypted according to the file cache
+					if (!empty($encryptionModuleId)) {
+						$encryptionModule = $this->encryptionManager->getEncryptionModule($encryptionModuleId);
+						$shouldEncrypt = true;
+					} else if (empty($encryptionModuleId) && $info['encrypted'] === true) {
+						// we come from a old installation. No header and/or no module defined
+						// but the file is encrypted. In this case we need to use the
+						// OC_DEFAULT_MODULE to read the file
+						$encryptionModule = $this->encryptionManager->getEncryptionModule('OC_DEFAULT_MODULE');
+						$shouldEncrypt = true;
+					}
+				}
+			} catch (ModuleDoesNotExistsException $e) {
+				$this->logger->warning('Encryption module "' . $encryptionModuleId .
+					'" not found, file will be stored unencrypted (' . $e->getMessage() . ')');
+			}
+
+			// encryption disabled on write of new file and write to existing unencrypted file -> don't encrypt
+			if (!$encryptionEnabled || !$this->mount->getOption('encrypt', true)) {
+				if (!$targetExists || !$targetIsEncrypted) {
+					$shouldEncrypt = false;
+				}
+			}
+
+			if ($shouldEncrypt === true && $encryptionModule !== null) {
+				$source = $this->storage->fopen($path, $mode);
+				$handle = \OC\Files\Stream\Encryption::wrap($source, $path, $fullPath, $header,
+					$this->uid, $encryptionModule, $this->storage, $this, $this->util, $this->fileHelper, $mode,
+					$size, $unencryptedSize, strlen($rawHeader));
+				return $handle;
+			}
+
 		}
 
-		try {
+		return $this->storage->fopen($path, $mode);
+	}
 
-			if (
-				$mode === 'w'
-				|| $mode === 'w+'
-				|| $mode === 'wb'
-				|| $mode === 'wb+'
-			) {
-				if ($encryptionEnabled) {
-					// if $encryptionModuleId is empty, the default module will be used
-					$encryptionModule = $this->encryptionManager->getEncryptionModule($encryptionModuleId);
-					$shouldEncrypt = $encryptionModule->shouldEncrypt($fullPath);
+	/**
+	 * @param Storage $sourceStorage
+	 * @param string $sourceInternalPath
+	 * @param string $targetInternalPath
+	 * @param bool $preserveMtime
+	 * @return bool
+	 */
+	public function moveFromStorage(Storage $sourceStorage, $sourceInternalPath, $targetInternalPath, $preserveMtime = true) {
+
+		// TODO clean this up once the underlying moveFromStorage in OC\Files\Storage\Wrapper\Common is fixed:
+		// - call $this->storage->moveFromStorage() instead of $this->copyBetweenStorage
+		// - copy the file cache update from  $this->copyBetweenStorage to this method
+		// - copy the copyKeys() call from  $this->copyBetweenStorage to this method
+		// - remove $this->copyBetweenStorage
+
+		$result = $this->copyBetweenStorage($sourceStorage, $sourceInternalPath, $targetInternalPath, $preserveMtime, true);
+		if ($result) {
+			if ($sourceStorage->is_dir($sourceInternalPath)) {
+				$result &= $sourceStorage->rmdir($sourceInternalPath);
+			} else {
+				$result &= $sourceStorage->unlink($sourceInternalPath);
+			}
+		}
+		return $result;
+	}
+
+
+	/**
+	 * @param Storage $sourceStorage
+	 * @param string $sourceInternalPath
+	 * @param string $targetInternalPath
+	 * @param bool $preserveMtime
+	 * @return bool
+	 */
+	public function copyFromStorage(Storage $sourceStorage, $sourceInternalPath, $targetInternalPath, $preserveMtime = false) {
+
+		// TODO clean this up once the underlying moveFromStorage in OC\Files\Storage\Wrapper\Common is fixed:
+		// - call $this->storage->moveFromStorage() instead of $this->copyBetweenStorage
+		// - copy the file cache update from  $this->copyBetweenStorage to this method
+		// - copy the copyKeys() call from  $this->copyBetweenStorage to this method
+		// - remove $this->copyBetweenStorage
+
+		return $this->copyBetweenStorage($sourceStorage, $sourceInternalPath, $targetInternalPath, $preserveMtime, false);
+	}
+
+	/**
+	 * copy file between two storages
+	 *
+	 * @param Storage $sourceStorage
+	 * @param string $sourceInternalPath
+	 * @param string $targetInternalPath
+	 * @param bool $preserveMtime
+	 * @param bool $isRename
+	 * @return bool
+	 */
+	private function copyBetweenStorage(Storage $sourceStorage, $sourceInternalPath, $targetInternalPath, $preserveMtime, $isRename) {
+
+		// first copy the keys that we reuse the existing file key on the target location
+		// and don't create a new one which would break versions for example.
+		$mount = $this->mountManager->findByStorageId($sourceStorage->getId());
+		if (count($mount) === 1) {
+			$mountPoint = $mount[0]->getMountPoint();
+			$source = $mountPoint . '/' . $sourceInternalPath;
+			$target = $this->getFullPath($targetInternalPath);
+			$this->copyKeys($source, $target);
+		} else {
+			$this->logger->error('Could not find mount point, can\'t keep encryption keys');
+		}
+
+		if ($sourceStorage->is_dir($sourceInternalPath)) {
+			$dh = $sourceStorage->opendir($sourceInternalPath);
+			$result = $this->mkdir($targetInternalPath);
+			if (is_resource($dh)) {
+				while ($result and ($file = readdir($dh)) !== false) {
+					if (!Filesystem::isIgnoredDir($file)) {
+						$result &= $this->copyFromStorage($sourceStorage, $sourceInternalPath . '/' . $file, $targetInternalPath . '/' . $file);
+					}
+				}
+			}
+		} else {
+			$source = $sourceStorage->fopen($sourceInternalPath, 'r');
+			$target = $this->fopen($targetInternalPath, 'w');
+			list(, $result) = \OC_Helper::streamCopy($source, $target);
+			fclose($source);
+			fclose($target);
+
+			if($result) {
+				if ($preserveMtime) {
+					$this->touch($targetInternalPath, $sourceStorage->filemtime($sourceInternalPath));
+				}
+				$isEncrypted = $this->mount->getOption('encrypt', true) ? 1 : 0;
+
+				// in case of a rename we need to manipulate the source cache because
+				// this information will be kept for the new target
+				if ($isRename) {
+					$sourceStorage->getCache()->put($sourceInternalPath, ['encrypted' => $isEncrypted]);
+				} else {
+					$this->getCache()->put($targetInternalPath, ['encrypted' => $isEncrypted]);
 				}
 			} else {
-				$info = $this->getCache()->get($path);
-				// only get encryption module if we found one in the header
-				// or if file should be encrypted according to the file cache
-				if (!empty($encryptionModuleId)) {
-					$encryptionModule = $this->encryptionManager->getEncryptionModule($encryptionModuleId);
-					$shouldEncrypt = true;
-				} else if(empty($encryptionModuleId) && $info['encrypted'] === true) {
-					// we come from a old installation. No header and/or no module defined
-					// but the file is encrypted. In this case we need to use the
-					// OC_DEFAULT_MODULE to read the file
-					$encryptionModule = $this->encryptionManager->getEncryptionModule('OC_DEFAULT_MODULE');
-					$shouldEncrypt = true;
-				}
-			}
-		} catch (ModuleDoesNotExistsException $e) {
-			$this->logger->warning('Encryption module "' . $encryptionModuleId .
-				'" not found, file will be stored unencrypted (' . $e->getMessage() . ')');
-		}
-
-		// encryption disabled on write of new file and write to existing unencrypted file -> don't encrypt
-		if (!$encryptionEnabled || !$this->mount->getOption('encrypt', true)) {
-			if (!$targetExists || !$targetIsEncrypted) {
-				$shouldEncrypt = false;
+				// delete partially written target file
+				$this->unlink($targetInternalPath);
+				// delete cache entry that was created by fopen
+				$this->getCache()->remove($targetInternalPath);
 			}
 		}
+		return (bool)$result;
 
-		if($shouldEncrypt === true && !$this->util->isExcluded($fullPath) && $encryptionModule !== null) {
-			$source = $this->storage->fopen($path, $mode);
-			$handle = \OC\Files\Stream\Encryption::wrap($source, $path, $fullPath, $header,
-				$this->uid, $encryptionModule, $this->storage, $this, $this->util, $this->fileHelper, $mode,
-				$size, $unencryptedSize, strlen($rawHeader));
-			return $handle;
-		} else {
-			return $this->storage->fopen($path, $mode);
-		}
 	}
 
 	/**
@@ -364,7 +535,13 @@ class Encryption extends Wrapper {
 	 * @return string
 	 */
 	public function getLocalFile($path) {
-		return $this->getCachedFile($path);
+		if ($this->encryptionManager->isEnabled()) {
+			$cachedFile = $this->getCachedFile($path);
+			if (is_string($cachedFile)) {
+				return $cachedFile;
+			}
+		}
+		return $this->storage->getLocalFile($path);
 	}
 
 	/**
@@ -463,7 +640,26 @@ class Encryption extends Wrapper {
 		return $encryptionModule;
 	}
 
+	/**
+	 * @param string $path
+	 * @param int $unencryptedSize
+	 */
 	public function updateUnencryptedSize($path, $unencryptedSize) {
 		$this->unencryptedSize[$path] = $unencryptedSize;
+	}
+
+	/**
+	 * copy keys to new location
+	 *
+	 * @param string $source path relative to data/
+	 * @param string $target path relative to data/
+	 * @return bool
+	 */
+	protected function copyKeys($source, $target) {
+		if (!$this->util->isExcluded($source)) {
+			return $this->keyStorage->copyKeys($source, $target);
+		}
+
+		return false;
 	}
 }

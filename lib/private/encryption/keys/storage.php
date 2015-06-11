@@ -70,8 +70,19 @@ class Storage implements IStorage {
 	 * @inheritdoc
 	 */
 	public function getFileKey($path, $keyId, $encryptionModuleId) {
-		$keyDir = $this->getFileKeyDir($encryptionModuleId, $path);
-		return $this->getKey($keyDir . $keyId);
+		$realFile = $this->util->stripPartialFileExtension($path);
+		$keyDir = $this->getFileKeyDir($encryptionModuleId, $realFile);
+		$key = $this->getKey($keyDir . $keyId);
+
+		if ($key === '' && $realFile !== $path) {
+			// Check if the part file has keys and use them, if no normal keys
+			// exist. This is required to fix copyBetweenStorage() when we
+			// rename a .part file over storage borders.
+			$keyDir = $this->getFileKeyDir($encryptionModuleId, $path);
+			$key = $this->getKey($keyDir . $keyId);
+		}
+
+		return $key;
 	}
 
 	/**
@@ -125,10 +136,9 @@ class Storage implements IStorage {
 	/**
 	 * @inheritdoc
 	 */
-	public function deleteAllFileKeys($path, $encryptionModuleId) {
-		$keyDir = $this->getFileKeyDir($encryptionModuleId, $path);
-		$path = dirname($keyDir);
-		return !$this->view->file_exists($path) || $this->view->deleteAll($path);
+	public function deleteAllFileKeys($path) {
+		$keyDir = $this->getFileKeyDir('', $path);
+		return !$this->view->file_exists($keyDir) || $this->view->deleteAll($keyDir);
 	}
 
 	/**
@@ -208,17 +218,10 @@ class Storage implements IStorage {
 	 * @param string $encryptionModuleId
 	 * @param string $path path to the file, relative to data/
 	 * @return string
-	 * @throws GenericEncryptionException
-	 * @internal param string $keyId
 	 */
 	private function getFileKeyDir($encryptionModuleId, $path) {
 
-		if ($this->view->is_dir($path)) {
-			throw new GenericEncryptionException("file was expected but directory was given: $path");
-		}
-
 		list($owner, $filename) = $this->util->getUidAndFilename($path);
-		$filename = $this->util->stripPartialFileExtension($filename);
 
 		// in case of system wide mount points the keys are stored directly in the data directory
 		if ($this->util->isSystemWideMountPoint($filename, $owner)) {
@@ -239,17 +242,8 @@ class Storage implements IStorage {
 	 */
 	public function renameKeys($source, $target) {
 
-		list($owner, $source) = $this->util->getUidAndFilename($source);
-		list(, $target) = $this->util->getUidAndFilename($target);
-		$systemWide = $this->util->isSystemWideMountPoint($target, $owner);
-
-		if ($systemWide) {
-			$sourcePath = $this->keys_base_dir . $source . '/';
-			$targetPath = $this->keys_base_dir . $target . '/';
-		} else {
-			$sourcePath = '/' . $owner . $this->keys_base_dir . $source . '/';
-			$targetPath = '/' . $owner . $this->keys_base_dir . $target . '/';
-		}
+		$sourcePath = $this->getPathToKeys($source);
+		$targetPath = $this->getPathToKeys($target);
 
 		if ($this->view->file_exists($sourcePath)) {
 			$this->keySetPreparation(dirname($targetPath));
@@ -261,6 +255,7 @@ class Storage implements IStorage {
 		return false;
 	}
 
+
 	/**
 	 * copy keys if a file was renamed
 	 *
@@ -270,17 +265,8 @@ class Storage implements IStorage {
 	 */
 	public function copyKeys($source, $target) {
 
-		list($owner, $source) = $this->util->getUidAndFilename($source);
-		list(, $target) = $this->util->getUidAndFilename($target);
-		$systemWide = $this->util->isSystemWideMountPoint($target, $owner);
-
-		if ($systemWide) {
-			$sourcePath = $this->keys_base_dir . $source . '/';
-			$targetPath = $this->keys_base_dir . $target . '/';
-		} else {
-			$sourcePath = '/' . $owner . $this->keys_base_dir . $source . '/';
-			$targetPath = '/' . $owner . $this->keys_base_dir . $target . '/';
-		}
+		$sourcePath = $this->getPathToKeys($source);
+		$targetPath = $this->getPathToKeys($target);
 
 		if ($this->view->file_exists($sourcePath)) {
 			$this->keySetPreparation(dirname($targetPath));
@@ -289,6 +275,25 @@ class Storage implements IStorage {
 		}
 
 		return false;
+	}
+
+	/**
+	 * get system wide path and detect mount points
+	 *
+	 * @param string $path
+	 * @return string
+	 */
+	protected function getPathToKeys($path) {
+		list($owner, $relativePath) = $this->util->getUidAndFilename($path);
+		$systemWideMountPoint = $this->util->isSystemWideMountPoint($relativePath, $owner);
+
+		if ($systemWideMountPoint) {
+			$systemPath = $this->keys_base_dir . $relativePath . '/';
+		} else {
+			$systemPath = '/' . $owner . $this->keys_base_dir . $relativePath . '/';
+		}
+
+		return $systemPath;
 	}
 
 	/**

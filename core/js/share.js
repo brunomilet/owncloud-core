@@ -15,7 +15,7 @@ OC.Share={
 	 * "user@example.com/path/to/owncloud"
 	 * "user@anotherexample.com@example.com/path/to/owncloud
 	 */
-	_REMOTE_OWNER_REGEXP: new RegExp("^([^@]*)@(([^@]*)@)?([^/]*)(.*)?$"),
+	_REMOTE_OWNER_REGEXP: new RegExp("^([^@]*)@(([^@]*)@)?([^/]*)([/](.*)?)?$"),
 
 	/**
 	 * @deprecated use OC.Share.currentShares instead
@@ -183,21 +183,22 @@ OC.Share={
 		}
 	},
 	/**
-	 * Format remote share owner to make it more readable
+	 * Format a remote address
 	 *
-	 * @param {String} owner full remote share owner name
-	 * @return {String} HTML code for the owner display
+	 * @param {String} remoteAddress full remote share
+	 * @return {String} HTML code to display
 	 */
-	_formatSharedByOwner: function(owner) {
-		var parts = this._REMOTE_OWNER_REGEXP.exec(owner);
+	_formatRemoteShare: function(remoteAddress) {
+		var parts = this._REMOTE_OWNER_REGEXP.exec(remoteAddress);
 		if (!parts) {
 			// display as is, most likely to be a simple owner name
-			return escapeHTML(owner);
+			return escapeHTML(remoteAddress);
 		}
 
 		var userName = parts[1];
 		var userDomain = parts[3];
 		var server = parts[4];
+		var dir = parts[6];
 		var tooltip = userName;
 		if (userDomain) {
 			tooltip += '@' + userDomain;
@@ -209,13 +210,27 @@ OC.Share={
 			tooltip += '@' + server;
 		}
 
-		var html = '<span class="remoteOwner" title="' + escapeHTML(tooltip) + '">';
+		var html = '<span class="remoteAddress" title="' + escapeHTML(tooltip) + '">';
 		html += '<span class="username">' + escapeHTML(userName) + '</span>';
 		if (userDomain) {
 			html += '<span class="userDomain">@' + escapeHTML(userDomain) + '</span>';
 		}
 		html += '</span>';
 		return html;
+	},
+	/**
+	 * Loop over all recipients in the list and format them using 
+	 * all kind of fancy magic.
+	 *
+	 * @param {String[]} recipients array of all the recipients
+	 * @return {String[]} modified list of recipients
+	 */
+	_formatShareList: function(recipients) {
+		var _parent = this;
+		return $.map(recipients, function(recipient) {
+			recipient = _parent._formatRemoteShare(recipient);
+			return recipient;
+		});
 	},
 	/**
 	 * Marks/unmarks a given file as shared by changing its action icon
@@ -255,14 +270,14 @@ OC.Share={
 			message = t('core', 'Shared');
 			// even if reshared, only show "Shared by"
 			if (owner) {
-				message = this._formatSharedByOwner(owner);
+				message = this._formatRemoteShare(owner);
 			}
 			else if (recipients) {
-				message = t('core', 'Shared with {recipients}', {recipients: recipients});
+				message = t('core', 'Shared with {recipients}', {recipients: this._formatShareList(recipients.split(", ")).join(", ")}, 0, {escape: false});
 			}
 			action.html(' <span>' + message + '</span>').prepend(img);
-			if (owner) {
-				action.find('.remoteOwner').tipsy({gravity: 's'});
+			if (owner || recipients) {
+				action.find('.remoteAddress').tipsy({gravity: 's'});
 			}
 		}
 		else {
@@ -356,7 +371,7 @@ OC.Share={
 		var data = OC.Share.loadItem(itemType, itemSource);
 		var dropDownEl;
 		var html = '<div id="dropdown" class="drop shareDropDown" data-item-type="'+itemType+'" data-item-source="'+itemSource+'">';
-		if (data !== false && data.reshare !== false && data.reshare.uid_owner !== undefined) {
+		if (data !== false && data.reshare !== false && data.reshare.uid_owner !== undefined && data.reshare.uid_owner !== OC.currentUser) {
 			html += '<span class="reshare">';
 			if (oc_config.enable_avatars === true) {
 				html += '<div class="avatar"></div> ';
@@ -491,7 +506,7 @@ OC.Share={
 			$('#shareWith').autocomplete({minLength: 2, delay: 750, source: function(search, response) {
 				var $loading = $('#dropdown .shareWithLoading');
 				$loading.removeClass('hidden');
-				$.get(OC.filePath('core', 'ajax', 'share.php'), { fetch: 'getShareWith', search: search.term.trim(), itemShares: OC.Share.itemShares, itemType: itemType }, function(result) {
+				$.get(OC.filePath('core', 'ajax', 'share.php'), { fetch: 'getShareWith', search: search.term.trim(), limit: 200, itemShares: OC.Share.itemShares, itemType: itemType }, function(result) {
 					$loading.addClass('hidden');
 					if (result.status == 'success' && result.data.length > 0) {
 						$( "#shareWith" ).autocomplete( "option", "autoFocus", true );
@@ -839,6 +854,24 @@ OC.Share={
 			$('#defaultExpireMessage').slideDown(OC.menuSpeed);
 		}
 		$.datepicker.setDefaults(datePickerOptions);
+	},
+	/**
+	 * Get the default Expire date
+	 *
+	 * @return {String} The expire date
+	 */
+	getDefaultExpirationDate:function() {
+		var expireDateString = '';
+		if (oc_appconfig.core.defaultExpireDateEnabled) {
+			var date = new Date().getTime();
+			var expireAfterMs = oc_appconfig.core.defaultExpireDate * 24 * 60 * 60 * 1000;
+			var expireDate = new Date(date + expireAfterMs);
+			var month = expireDate.getMonth() + 1;
+			var year = expireDate.getFullYear();
+			var day = expireDate.getDate();
+			expireDateString = year + "-" + month + '-' + day + ' 00:00:00';
+		}
+		return expireDateString;
 	}
 };
 
@@ -986,18 +1019,15 @@ $(document).ready(function() {
 			$('#linkPassText').attr('placeholder', t('core', 'Choose a password for the public link'));
 			// Reset link
 			$('#linkText').val('');
+			$('#showPassword').prop('checked', false);
+			$('#linkPass').hide();
+			$('#sharingDialogAllowPublicUpload').prop('checked', false);
+			$('#expirationCheckbox').prop('checked', false);
+			$('#expirationDate').hide();
 			var expireDateString = '';
-			if (oc_appconfig.core.defaultExpireDateEnabled) {
-				var date = new Date().getTime();
-				var expireAfterMs = oc_appconfig.core.defaultExpireDate * 24 * 60 * 60 * 1000;
-				var expireDate = new Date(date + expireAfterMs);
-				var month = expireDate.getMonth() + 1;
-				var year = expireDate.getFullYear();
-				var day = expireDate.getDate();
-				expireDateString = year + "-" + month + '-' + day + ' 00:00:00';
-			}
 			// Create a link
 			if (oc_appconfig.core.enforcePasswordForPublicLink === false) {
+				expireDateString = OC.Share.getDefaultExpirationDate();
 				$loading.removeClass('hidden');
 				$button.addClass('hidden');
 				$button.prop('disabled', true);
@@ -1135,8 +1165,10 @@ $(document).ready(function() {
 				permissions = OC.PERMISSION_READ;
 			}
 
+			var expireDateString = OC.Share.getDefaultExpirationDate();
+
 			$loading.removeClass('hidden');
-			OC.Share.share(itemType, itemSource, OC.Share.SHARE_TYPE_LINK, $('#linkPassText').val(), permissions, itemSourceName, function(data) {
+			OC.Share.share(itemType, itemSource, OC.Share.SHARE_TYPE_LINK, $('#linkPassText').val(), permissions, itemSourceName, expireDateString, function(data) {
 				$loading.addClass('hidden');
 				linkPassText.val('');
 				linkPassText.attr('placeholder', t('core', 'Password protected'));
@@ -1145,8 +1177,12 @@ $(document).ready(function() {
 					OC.Share.showLink(data.token, "password set", itemSource);
 					OC.Share.updateIcon(itemType, itemSource);
 				}
+				$('#dropdown').trigger(new $.Event('sharesChanged', {shares: OC.Share.currentShares}));
 			});
 
+			if (expireDateString !== '') {
+				OC.Share.showExpirationDate(expireDateString);
+			}
 		}
 	});
 

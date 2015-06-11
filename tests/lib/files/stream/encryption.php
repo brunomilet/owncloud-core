@@ -3,9 +3,11 @@
 namespace Test\Files\Stream;
 
 use OC\Files\View;
-use OCA\Encryption_Dummy\DummyModule;
 
 class Encryption extends \Test\TestCase {
+
+	/** @var  \OCP\Encryption\IEncryptionModule | \PHPUnit_Framework_MockObject_MockObject  */
+	private $encryptionModule;
 
 	/**
 	 * @param string $fileName
@@ -13,7 +15,7 @@ class Encryption extends \Test\TestCase {
 	 * @param integer $unencryptedSize
 	 * @return resource
 	 */
-	protected function getStream($fileName, $mode, $unencryptedSize) {
+	protected function getStream($fileName, $mode, $unencryptedSize, $wrapper = '\OC\Files\Stream\Encryption') {
 		clearstatcache();
 		$size = filesize($fileName);
 		$source = fopen($fileName, $mode);
@@ -21,7 +23,7 @@ class Encryption extends \Test\TestCase {
 		$fullPath = $fileName;
 		$header = [];
 		$uid = '';
-		$encryptionModule = $this->buildMockModule();
+		$this->encryptionModule = $this->buildMockModule();
 		$storage = $this->getMockBuilder('\OC\Files\Storage\Storage')
 			->disableOriginalConstructor()->getMock();
 		$encStorage = $this->getMockBuilder('\OC\Files\Storage\Wrapper\Encryption')
@@ -42,9 +44,10 @@ class Encryption extends \Test\TestCase {
 			->method('getUidAndFilename')
 			->willReturn(['user1', $internalPath]);
 
-		return \OC\Files\Stream\Encryption::wrap($source, $internalPath,
-			$fullPath, $header, $uid, $encryptionModule, $storage, $encStorage,
-			$util, $file, $mode, $size, $unencryptedSize, 8192);
+
+		return $wrapper::wrap($source, $internalPath,
+			$fullPath, $header, $uid, $this->encryptionModule, $storage, $encStorage,
+			$util, $file, $mode, $size, $unencryptedSize, 8192, $wrapper);
 	}
 
 	/**
@@ -160,15 +163,6 @@ class Encryption extends \Test\TestCase {
 		$this->assertEquals('foobar', fread($stream, 100));
 		fclose($stream);
 
-		unlink($fileName);
-	}
-
-	public function testWriteWriteRead() {
-		$fileName = tempnam("/tmp", "FOO");
-		$stream = $this->getStream($fileName, 'w+', 0);
-		$this->assertEquals(6, fwrite($stream, 'foobar'));
-		fclose($stream);
-
 		$stream = $this->getStream($fileName, 'r+', 6);
 		$this->assertEquals(3, fwrite($stream, 'bar'));
 		fclose($stream);
@@ -176,6 +170,8 @@ class Encryption extends \Test\TestCase {
 		$stream = $this->getStream($fileName, 'r', 6);
 		$this->assertEquals('barbar', fread($stream, 100));
 		fclose($stream);
+
+		unlink($fileName);
 	}
 
 	public function testRewind() {
@@ -191,7 +187,9 @@ class Encryption extends \Test\TestCase {
 		$stream = $this->getStream($fileName, 'r', 6);
 		$this->assertEquals('barbar', fread($stream, 100));
 		fclose($stream);
-	}
+	
+		unlink($fileName);
+}
 
 	public function testSeek() {
 		$fileName = tempnam("/tmp", "FOO");
@@ -203,6 +201,12 @@ class Encryption extends \Test\TestCase {
 
 		$stream = $this->getStream($fileName, 'r', 9);
 		$this->assertEquals('foofoobar', fread($stream, 100));
+		$this->assertEquals(-1, fseek($stream, 10));
+		$this->assertEquals(0, fseek($stream, 9));
+		$this->assertEquals(-1, fseek($stream, -10, SEEK_CUR));
+		$this->assertEquals(0, fseek($stream, -9, SEEK_CUR));
+		$this->assertEquals(-1, fseek($stream, -10, SEEK_END));
+		$this->assertEquals(0, fseek($stream, -9, SEEK_END));
 		fclose($stream);
 
 		unlink($fileName);
@@ -220,10 +224,15 @@ class Encryption extends \Test\TestCase {
 	 * @dataProvider dataFilesProvider
 	 */
 	public function testWriteReadBigFile($testFile) {
+
 		$expectedData = file_get_contents(\OC::$SERVERROOT . '/tests/data/' . $testFile);
 		// write it
 		$fileName = tempnam("/tmp", "FOO");
 		$stream = $this->getStream($fileName, 'w+', 0);
+		// while writing the file from the beginning to the end we should never try
+		// to read parts of the file. This should only happen for write operations
+		// in the middle of a file
+		$this->encryptionModule->expects($this->never())->method('decrypt');
 		fwrite($stream, $expectedData);
 		fclose($stream);
 
@@ -248,18 +257,62 @@ class Encryption extends \Test\TestCase {
 	}
 
 	/**
+	 * simulate a non-seekable storage
+	 *
+	 * @dataProvider dataFilesProvider
+	 */
+	public function testWriteToNonSeekableStorage($testFile) {
+
+		$wrapper = $this->getMockBuilder('\OC\Files\Stream\Encryption')
+			->setMethods(['parentSeekStream'])->getMock();
+		$wrapper->expects($this->any())->method('parentSeekStream')->willReturn(false);
+
+		$expectedData = file_get_contents(\OC::$SERVERROOT . '/tests/data/' . $testFile);
+		// write it
+		$fileName = tempnam("/tmp", "FOO");
+		$stream = $this->getStream($fileName, 'w+', 0, '\Test\Files\Stream\DummyEncryptionWrapper');
+		// while writing the file from the beginning to the end we should never try
+		// to read parts of the file. This should only happen for write operations
+		// in the middle of a file
+		$this->encryptionModule->expects($this->never())->method('decrypt');
+		fwrite($stream, $expectedData);
+		fclose($stream);
+
+		// read it all
+		$stream = $this->getStream($fileName, 'r', strlen($expectedData), '\Test\Files\Stream\DummyEncryptionWrapper');
+		$data = stream_get_contents($stream);
+		fclose($stream);
+
+		$this->assertEquals($expectedData, $data);
+
+		// another read test with a loop like we do in several places:
+		$stream = $this->getStream($fileName, 'r', strlen($expectedData));
+		$data = '';
+		while (!feof($stream)) {
+			$data .= fread($stream, 8192);
+		}
+		fclose($stream);
+
+		$this->assertEquals($expectedData, $data);
+
+		unlink($fileName);
+
+	}
+
+	/**
 	 * @return \PHPUnit_Framework_MockObject_MockObject
 	 */
 	protected function buildMockModule() {
 		$encryptionModule = $this->getMockBuilder('\OCP\Encryption\IEncryptionModule')
 			->disableOriginalConstructor()
-			->setMethods(['getId', 'getDisplayName', 'begin', 'end', 'encrypt', 'decrypt', 'update', 'shouldEncrypt', 'getUnencryptedBlockSize'])
+			->setMethods(['getId', 'getDisplayName', 'begin', 'end', 'encrypt', 'decrypt', 'update', 'shouldEncrypt', 'getUnencryptedBlockSize', 'isReadable'])
 			->getMock();
 
 		$encryptionModule->expects($this->any())->method('getId')->willReturn('UNIT_TEST_MODULE');
 		$encryptionModule->expects($this->any())->method('getDisplayName')->willReturn('Unit test module');
 		$encryptionModule->expects($this->any())->method('begin')->willReturn([]);
 		$encryptionModule->expects($this->any())->method('end')->willReturn('');
+		$encryptionModule->expects($this->any())->method('isReadable')->willReturn(true);
 		$encryptionModule->expects($this->any())->method('encrypt')->willReturnCallback(function($data) {
 			// simulate different block size by adding some padding to the data
 			if (isset($data[6125])) {

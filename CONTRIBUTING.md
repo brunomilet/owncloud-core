@@ -2,9 +2,9 @@
 
 If you have questions about how to install or use ownCloud, please direct these to the [mailing list][mailinglist] or our [forum][forum]. We are also available on [IRC][irc].
 
-### TL;DR
+### Short version
 
- * The [**issue template can be found here**][template] but be aware of the different repositories! See list below.
+ * The [**issue template can be found here**][template] but be aware of the different repositories! See list below. Please always use the issue template when reporting issues.
 
 ### Guidelines
 * Please search the existing issues first, it's likely that your issue was already reported or even fixed.
@@ -12,6 +12,7 @@ If you have questions about how to install or use ownCloud, please direct these 
   - You can also filter by appending e. g. "state:open" to the search string.
   - More info on [search syntax within github](https://help.github.com/articles/searching-issues)
 * This repository ([core](https://github.com/owncloud/core/issues)) is *only* for issues within the ownCloud core code. This also includes the apps: files, encryption, external storage, sharing, deleted files, versions, LDAP, and WebDAV Auth
+* __SECURITY__: Report any potential security bug to security@owncloud.com following our [security policy](https://owncloud.org/security/) instead of filing an issue in our bug tracker
 * The issues in other components should be reported in their respective repositories: 
   - [Android client](https://github.com/owncloud/android/issues)
   - [iOS client](https://github.com/owncloud/ios-issues/issues)

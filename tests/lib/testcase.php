@@ -43,9 +43,42 @@ abstract class TestCase extends \PHPUnit_Framework_TestCase {
 	protected function tearDown() {
 		$hookExceptions = \OC_Hook::$thrownExceptions;
 		\OC_Hook::$thrownExceptions = [];
+		\OC::$server->getLockingProvider()->releaseAll();
 		if(!empty($hookExceptions)) {
 			throw $hookExceptions[0];
 		}
+	}
+
+	/**
+	 * Allows us to test private methods/properties
+	 *
+	 * @param $object
+	 * @param $methodName
+	 * @param array $parameters
+	 * @return mixed
+	 */
+	protected static function invokePrivate($object, $methodName, array $parameters = array()) {
+		$reflection = new \ReflectionClass(get_class($object));
+
+		if ($reflection->hasMethod($methodName)) {
+			$method = $reflection->getMethod($methodName);
+
+			$method->setAccessible(true);
+
+			return $method->invokeArgs($object, $parameters);
+		} elseif ($reflection->hasProperty($methodName)) {
+			$property = $reflection->getProperty($methodName);
+
+			$property->setAccessible(true);
+
+			if (!empty($parameters)) {
+				$property->setValue($object, array_pop($parameters));
+			}
+
+			return $property->getValue($object);
+		}
+
+		return false;
 	}
 
 	/**
@@ -174,6 +207,9 @@ abstract class TestCase extends \PHPUnit_Framework_TestCase {
 		\OC\Files\Filesystem::tearDown();
 		\OC_User::setUserId($user);
 		\OC_Util::setupFS($user);
+		if (\OC_User::userExists($user)) {
+			\OC::$server->getUserFolder($user);
+		}
 	}
 
 	/**
@@ -182,6 +218,8 @@ abstract class TestCase extends \PHPUnit_Framework_TestCase {
 	static protected function logout() {
 		\OC_Util::tearDownFS();
 		\OC_User::setUserId('');
+		// needed for fully logout
+		\OC::$server->getUserSession()->setUser(null);
 	}
 
 	/**

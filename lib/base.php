@@ -503,6 +503,12 @@ class OC {
 		}
 	}
 
+	/**
+	 * Try to set some values to the required ownCloud default
+	 */
+	public static function setRequiredIniValues() {
+		@ini_set('default_charset', 'UTF-8');
+	}
 
 	public static function init() {
 		// register autoloader
@@ -536,12 +542,10 @@ class OC {
 		\OC::$server->getEventLogger()->log('autoloader', 'Autoloader', $loaderStart, $loaderEnd);
 		\OC::$server->getEventLogger()->start('boot', 'Initialize');
 
-		// set some stuff
-		//ob_start();
+		// Don't display errors and log them
 		error_reporting(E_ALL | E_STRICT);
-		if (defined('DEBUG') && DEBUG) {
-			ini_set('display_errors', 1);
-		}
+		@ini_set('display_errors', 0);
+		@ini_set('log_errors', 1);
 
 		date_default_timezone_set('UTC');
 
@@ -559,6 +563,7 @@ class OC {
 		@ini_set('post_max_size', '10G');
 		@ini_set('file_uploads', '50');
 
+		self::setRequiredIniValues();
 		self::handleAuthHeaders();
 		self::registerAutoloaderCache();
 
@@ -649,7 +654,9 @@ class OC {
 
 		self::registerCacheHooks();
 		self::registerFilesystemHooks();
-		self::registerPreviewHooks();
+		if (\OC::$server->getSystemConfig()->getValue('enable_previews', true)) {
+			self::registerPreviewHooks();
+		}	
 		self::registerShareHooks();
 		self::registerLogRotate();
 		self::registerLocalAddressBook();
@@ -659,6 +666,8 @@ class OC {
 		//make sure temporary files are cleaned up
 		$tmpManager = \OC::$server->getTempManager();
 		register_shutdown_function(array($tmpManager, 'clean'));
+		$lockProvider = \OC::$server->getLockingProvider();
+		register_shutdown_function(array($lockProvider, 'releaseAll'));
 
 		if ($systemConfig->getValue('installed', false) && !self::checkUpgrade(false)) {
 			if (\OC::$server->getConfig()->getAppValue('core', 'backgroundjobs_mode', 'ajax') == 'ajax') {
@@ -711,8 +720,24 @@ class OC {
 		});
 	}
 
+	/**
+	 * register hooks for the cache
+	 */
+	public static function registerCacheHooks() {
+		//don't try to do this before we are properly setup
+		if (\OC::$server->getSystemConfig()->getValue('installed', false) && !\OCP\Util::needUpgrade()) {
+
+			// NOTE: This will be replaced to use OCP
+			$userSession = self::$server->getUserSession();
+			$userSession->listen('\OC\User', 'postLogin', function () {
+				$cache = new \OC\Cache\File();
+				$cache->gc();
+			});
+		}
+	}
+
 	private static function registerEncryptionWrapper() {
-		\OCP\Util::connectHook('OC_Filesystem', 'setup', 'OC\Encryption\Manager', 'setupStorage');
+		\OCP\Util::connectHook('OC_Filesystem', 'preSetup', 'OC\Encryption\Manager', 'setupStorage');
 	}
 
 	private static function registerEncryptionHooks() {
@@ -720,19 +745,8 @@ class OC {
 		if ($enabled) {
 			\OCP\Util::connectHook('OCP\Share', 'post_shared', 'OC\Encryption\HookManager', 'postShared');
 			\OCP\Util::connectHook('OCP\Share', 'post_unshare', 'OC\Encryption\HookManager', 'postUnshared');
-		}
-	}
-
-	/**
-	 * register hooks for the cache
-	 */
-	public static function registerCacheHooks() {
-		if (\OC::$server->getSystemConfig()->getValue('installed', false) && !\OCP\Util::needUpgrade()) { //don't try to do this before we are properly setup
-			\OCP\BackgroundJob::registerJob('OC\Cache\FileGlobalGC');
-
-			// NOTE: This will be replaced to use OCP
-			$userSession = \OC_User::getUserSession();
-			$userSession->listen('postLogin', '\OC\Cache\File', 'loginListener');
+			\OCP\Util::connectHook('OC_Filesystem', 'post_rename', 'OC\Encryption\HookManager', 'postRename');
+			\OCP\Util::connectHook('\OCA\Files_Trashbin\Trashbin', 'post_restore', 'OC\Encryption\HookManager', 'postRestore');
 		}
 	}
 

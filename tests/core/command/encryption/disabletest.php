@@ -72,7 +72,7 @@ class DisableTest extends TestCase {
 
 		$this->consoleOutput->expects($this->once())
 			->method('writeln')
-			->with($expectedString);
+			->with($this->stringContains($expectedString));
 
 		if ($isUpdating) {
 			$this->config->expects($this->once())
@@ -80,6 +80,6 @@ class DisableTest extends TestCase {
 				->with('core', 'encryption_enabled', 'no');
 		}
 
-		\Test_Helper::invokePrivate($this->command, 'execute', [$this->consoleInput, $this->consoleOutput]);
+		self::invokePrivate($this->command, 'execute', [$this->consoleInput, $this->consoleOutput]);
 	}
 }

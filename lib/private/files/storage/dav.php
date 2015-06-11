@@ -346,8 +346,12 @@ class DAV extends Common {
 				curl_setopt($curl, CURLOPT_URL, $this->createBaseUri() . $this->encodePath($path));
 				curl_setopt($curl, CURLOPT_FILE, $fp);
 				curl_setopt($curl, CURLOPT_FOLLOWLOCATION, true);
-				curl_setopt($curl, CURLOPT_PROTOCOLS,  CURLPROTO_HTTP | CURLPROTO_HTTPS);
-				curl_setopt($curl, CURLOPT_REDIR_PROTOCOLS,  CURLPROTO_HTTP | CURLPROTO_HTTPS);
+				if(defined('CURLOPT_PROTOCOLS')) {
+					curl_setopt($curl, CURLOPT_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS);
+				}
+				if(defined('CURLOPT_REDIR_PROTOCOLS')) {
+					curl_setopt($curl, CURLOPT_REDIR_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS);
+				}
 				if ($this->secure === true) {
 					curl_setopt($curl, CURLOPT_SSL_VERIFYPEER, true);
 					curl_setopt($curl, CURLOPT_SSL_VERIFYHOST, 2);
@@ -678,7 +682,7 @@ class DAV extends Common {
 	public function getPermissions($path) {
 		$this->init();
 		$path = $this->cleanPath($path);
-		$response = $this->client->propfind($this->encodePath($path), array('{http://owncloud.org/ns}permissions'));
+		$response = $this->propfind($path);
 		if (isset($response['{http://owncloud.org/ns}permissions'])) {
 			return $this->parsePermissions($response['{http://owncloud.org/ns}permissions']);
 		} else if ($this->is_dir($path)) {
@@ -688,6 +692,17 @@ class DAV extends Common {
 		} else {
 			return 0;
 		}
+	}
+
+	/** {@inheritdoc} */
+	public function getETag($path) {
+		$this->init();
+		$path = $this->cleanPath($path);
+		$response = $this->propfind($path);
+		if (isset($response['{DAV:}getetag'])) {
+			return trim($response['{DAV:}getetag'], '"');
+		}
+		return parent::getEtag($path);
 	}
 
 	/**
@@ -729,8 +744,11 @@ class DAV extends Common {
 			$response = $this->propfind($path);
 			if (isset($response['{DAV:}getetag'])) {
 				$cachedData = $this->getCache()->get($path);
-				$etag = trim($response['{DAV:}getetag'], '"');
-				if ($cachedData['etag'] !== $etag) {
+				$etag = null;
+				if (isset($response['{DAV:}getetag'])) {
+					$etag = trim($response['{DAV:}getetag'], '"');
+				}
+				if (!empty($etag) && $cachedData['etag'] !== $etag) {
 					return true;
 				} else if (isset($response['{http://owncloud.org/ns}permissions'])) {
 					$permissions = $this->parsePermissions($response['{http://owncloud.org/ns}permissions']);

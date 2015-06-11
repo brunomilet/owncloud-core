@@ -1290,7 +1290,7 @@ class UsersControllerTest extends \Test\TestCase {
 
 		list($user, $expectedResult) = $this->mockUser();
 
-		$result = \Test_Helper::invokePrivate($this->container['UsersController'], 'formatUserForIndex', [$user]);
+		$result = self::invokePrivate($this->container['UsersController'], 'formatUserForIndex', [$user]);
 		$this->assertEquals($expectedResult, $result);
 	}
 
@@ -1303,14 +1303,14 @@ class UsersControllerTest extends \Test\TestCase {
 			->expects($this->once())
 			->method('isEnabledForUser')
 			->with(
-				$this->equalTo('files_encryption')
+				$this->equalTo('encryption')
 			)
 			->will($this->returnValue(true));
 		$this->container['Config']
 			->expects($this->once())
 			->method('getAppValue')
 			->with(
-				$this->equalTo('files_encryption'),
+				$this->equalTo('encryption'),
 				$this->equalTo('recoveryAdminEnabled'),
 				$this->anything()
 			)
@@ -1321,13 +1321,13 @@ class UsersControllerTest extends \Test\TestCase {
 			->method('getUserValue')
 			->with(
 				$this->anything(),
-				$this->equalTo('files_encryption'),
-				$this->equalTo('recovery_enabled'),
+				$this->equalTo('encryption'),
+				$this->equalTo('recoveryEnabled'),
 				$this->anything()
 			)
 			->will($this->returnValue('1'));
 
-		$result = \Test_Helper::invokePrivate($this->container['UsersController'], 'formatUserForIndex', [$user]);
+		$result = self::invokePrivate($this->container['UsersController'], 'formatUserForIndex', [$user]);
 		$this->assertEquals($expectedResult, $result);
 	}
 
@@ -1339,13 +1339,13 @@ class UsersControllerTest extends \Test\TestCase {
 		$this->container['OCP\\App\\IAppManager']
 			->method('isEnabledForUser')
 			->with(
-				$this->equalTo('files_encryption')
+				$this->equalTo('encryption')
 			)
 			->will($this->returnValue(true));
 
 		$expectedResult['isRestoreDisabled'] = true;
 
-		$result = \Test_Helper::invokePrivate($this->container['UsersController'], 'formatUserForIndex', [$user]);
+		$result = self::invokePrivate($this->container['UsersController'], 'formatUserForIndex', [$user]);
 		$this->assertEquals($expectedResult, $result);
 	}
 
@@ -1358,14 +1358,14 @@ class UsersControllerTest extends \Test\TestCase {
 			->expects($this->once())
 			->method('isEnabledForUser')
 			->with(
-				$this->equalTo('files_encryption')
+				$this->equalTo('encryption')
 			)
 			->will($this->returnValue(true));
 		$this->container['Config']
 			->expects($this->once())
 			->method('getAppValue')
 			->with(
-				$this->equalTo('files_encryption'),
+				$this->equalTo('encryption'),
 				$this->equalTo('recoveryAdminEnabled'),
 				$this->anything()
 			)
@@ -1376,16 +1376,86 @@ class UsersControllerTest extends \Test\TestCase {
 			->method('getUserValue')
 			->with(
 				$this->anything(),
-				$this->equalTo('files_encryption'),
-				$this->equalTo('recovery_enabled'),
+				$this->equalTo('encryption'),
+				$this->equalTo('recoveryEnabled'),
 				$this->anything()
 			)
 			->will($this->returnValue('0'));
 
 		$expectedResult['isRestoreDisabled'] = true;
 
-		$result = \Test_Helper::invokePrivate($this->container['UsersController'], 'formatUserForIndex', [$user]);
+		$result = self::invokePrivate($this->container['UsersController'], 'formatUserForIndex', [$user]);
 		$this->assertEquals($expectedResult, $result);
+	}
+
+	public function setEmailAddressData() {
+		return [
+			['', true, false, true],
+			['foobar@localhost', true, true, false],
+			['foo@bar@localhost', false, false, false],
+		];
+	}
+
+	/**
+	 * @dataProvider setEmailAddressData
+	 *
+	 * @param string $mailAddress
+	 * @param bool $isValid
+	 * @param bool $expectsUpdate
+	 * @param bool $expectsDelete
+	 */
+	public function testSetEmailAddress($mailAddress, $isValid, $expectsUpdate, $expectsDelete) {
+		$this->container['IsAdmin'] = true;
+
+		$user = $this->getMockBuilder('\OC\User\User')
+			->disableOriginalConstructor()->getMock();
+		$user
+			->expects($this->any())
+			->method('getUID')
+			->will($this->returnValue('foo'));
+		$this->container['UserSession']
+			->expects($this->atLeastOnce())
+			->method('getUser')
+			->will($this->returnValue($user));
+		$this->container['Mailer']
+			->expects($this->any())
+			->method('validateMailAddress')
+			->with($mailAddress)
+			->willReturn($isValid);
+
+		if ($isValid) {
+			$user->expects($this->atLeastOnce())
+				->method('canChangeDisplayName')
+				->willReturn(true);
+
+			$this->container['UserManager']
+				->expects($this->atLeastOnce())
+				->method('get')
+				->with('foo')
+				->will($this->returnValue($user));
+		}
+
+		$this->container['Config']
+			->expects(($expectsUpdate) ? $this->once() : $this->never())
+			->method('setUserValue')
+			->with(
+				$this->equalTo($user->getUID()),
+				$this->equalTo('settings'),
+				$this->equalTo('email'),
+				$this->equalTo($mailAddress)
+
+			);
+		$this->container['Config']
+			->expects(($expectsDelete) ? $this->once() : $this->never())
+			->method('deleteUserValue')
+			->with(
+				$this->equalTo($user->getUID()),
+				$this->equalTo('settings'),
+				$this->equalTo('email')
+
+			);
+
+		$this->container['UsersController']->setMailAddress($user->getUID(), $mailAddress);
 	}
 
 }

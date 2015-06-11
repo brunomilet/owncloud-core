@@ -176,7 +176,7 @@ EOF
     FILES_EXTERNAL_BACKEND_ENV_PATH=../apps/files_external/tests/env
 
 	for startFile in `ls -1 $FILES_EXTERNAL_BACKEND_ENV_PATH | grep start`; do
-	    name=`echo $startFile | replace "start-" "" | replace ".sh" ""`
+	    name=`echo $startFile | sed 's/start-//' | sed 's/\.sh//'`
 
 	    if [ -n "$2" -a "$2" != "$name" ]; then
 	        echo "skip: $startFile"
@@ -206,7 +206,7 @@ EOF
         fi
 
 	    # calculate stop file
-	    stopFile=`echo "$startFile" | replace start stop`
+	    stopFile=`echo "$startFile" | sed 's/start/stop/'`
 	    echo "stop: $stopFile"
 	    if [ -f $FILES_EXTERNAL_BACKEND_ENV_PATH/$stopFile ]; then
 	        # execute stop file if existant

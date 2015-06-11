@@ -281,8 +281,10 @@ if (isset($_POST['action']) && isset($_POST['itemType']) && isset($_POST['itemSo
 				$users = array();
 				$limit = 0;
 				$offset = 0;
-				while ($count < 15 && count($users) == $limit) {
-					$limit = 15 - $count;
+				// limit defaults to 15 if not specified via request parameter and can be no larger than 500
+				$request_limit = min((int)$_GET['limit'] ?: 15, 500);
+				while ($count < $request_limit && count($users) == $limit) {
+					$limit = $request_limit - $count;
 					if ($shareWithinGroupOnly) {
 						$users = OC_Group::displayNamesInGroups($usergroups, (string)$_GET['search'], $limit, $offset);
 					} else {
@@ -319,7 +321,7 @@ if (isset($_POST['action']) && isset($_POST['itemType']) && isset($_POST['itemSo
 						continue;
 					}
 
-					if ($count < 15) {
+					if ($count < $request_limit) {
 						if (!isset($_GET['itemShares'])
 							|| !isset($_GET['itemShares'][OCP\Share::SHARE_TYPE_GROUP])
 							|| !is_array((string)$_GET['itemShares'][OCP\Share::SHARE_TYPE_GROUP])
@@ -354,7 +356,7 @@ if (isset($_POST['action']) && isset($_POST['itemType']) && isset($_POST['itemSo
 
 				$sorter = new \OC\Share\SearchResultSorter((string)$_GET['search'],
 														   'label',
-														   new \OC\Log());
+														   \OC::$server->getLogger());
 				usort($shareWith, array($sorter, 'sort'));
 				OC_JSON::success(array('data' => $shareWith));
 			}

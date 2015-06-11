@@ -14,6 +14,11 @@ OCA = OCA || {};
 	 * in the LDAP wizard.
 	 */
 	var WizardTabElementary = OCA.LDAP.Wizard.WizardTabGeneric.subClass({
+		/** @property {number} */
+		_configChooserNextServerNumber: 1,
+
+		baseDNTestTriggered: false,
+
 		/**
 		 * initializes the instance. Always call it after initialization.
 		 *
@@ -24,7 +29,7 @@ OCA = OCA || {};
 			tabIndex = 0;
 			this._super(tabIndex, tabID);
 			this.isActive = true;
-			this.configChooserID = '#ldap_serverconfig_chooser';
+			this.$configChooser = $('#ldap_serverconfig_chooser');
 
 			var items = {
 				ldap_host: {
@@ -88,7 +93,7 @@ OCA = OCA || {};
 		 * @returns {string}
 		 */
 		getConfigID: function() {
-			return $(this.configChooserID).val();
+			return this.$configChooser.val();
 		},
 
 		/**
@@ -162,6 +167,12 @@ OCA = OCA || {};
 		 * @inheritdoc
 		 */
 		overrideErrorMessage: function(message, key) {
+			var original = message;
+			message = this._super(message, key);
+			if(original !== message) {
+				// we pass the parents change
+				return message;
+			}
 			switch(key) {
 				case 'ldap_port':
 					if (message === 'Invalid credentials') {
@@ -189,8 +200,8 @@ OCA = OCA || {};
 		 * @param {Object} configuration
 		 */
 		onConfigSwitch: function(view, configuration) {
+			this.baseDNTestTriggered = false;
 			view.disableElement(view.managedItems.ldap_port.$relatedElements);
-
 			view.onConfigLoaded(view, configuration);
 		},
 
@@ -204,9 +215,16 @@ OCA = OCA || {};
 		 */
 		onNewConfiguration: function(view, result) {
 			if(result.isSuccess === true) {
-				$(view.configChooserID + ' option:selected').removeAttr('selected');
-				var html = '<option value="'+result.configPrefix+'" selected="selected">'+t('user_ldap','{nthServer}. Server', {nthServer: $(view.configChooserID + ' option').length + 1})+'</option>';
-				$(view.configChooserID + ' option:last').after(html);
+				var nthServer = view._configChooserNextServerNumber;
+				view.$configChooser.find('option:selected').removeAttr('selected');
+				var html = '<option value="'+result.configPrefix+'" selected="selected">'+t('user_ldap','{nthServer}. Server', {nthServer: nthServer})+'</option>';
+				if(view.$configChooser.find('option:last').length > 0) {
+					view.$configChooser.find('option:last').after(html);
+				} else {
+					view.$configChooser.html(html);
+				}
+
+				view._configChooserNextServerNumber++;
 			}
 		},
 
@@ -222,16 +240,16 @@ OCA = OCA || {};
 				if(view.getConfigID() === result.configPrefix) {
 					// if the deleted value is still the selected one (99% of
 					// the cases), remove it from the list and load the topmost
-					$(view.configChooserID + ' option:selected').remove();
-					$(view.configChooserID + ' option:first').select();
-					if($(view.configChooserID +  ' option').length < 2) {
+					view.$configChooser.find('option:selected').remove();
+					view.$configChooser.find('option:first').select();
+					if(view.$configChooser.find(' option').length < 1) {
 						view.configModel.newConfig(false);
 					} else {
 						view.configModel.load(view.getConfigID());
 					}
 				} else {
 					// otherwise just remove the entry
-					$(view.configChooserID + ' option[value=' + result.configPrefix + ']').remove();
+					view.$configChooser.find('option[value=' + result.configPrefix + ']').remove();
 				}
 			} else {
 				OC.Notification.showTemporary(result.errorMessage);
@@ -245,19 +263,21 @@ OCA = OCA || {};
 		 * @param {FeaturePayload} payload
 		 */
 		onTestResultReceived: function(view, payload) {
-			if(payload.feature === 'TestBaseDN') {
+			if(view.baseDNTestTriggered && payload.feature === 'TestBaseDN') {
+				view.enableElement(view.managedItems.ldap_base.$testButton);
 				var message;
 				if(payload.data.status === 'success') {
 					var objectsFound = parseInt(payload.data.changes.ldap_test_base, 10);
 					if(objectsFound < 1) {
 						message = t('user_ldap', 'No object found in the given Base DN. Please revise.');
 					} else if(objectsFound > 1000) {
-						message = t('user_ldap', 'More then 1.000 directory entries available.');
+						message = t('user_ldap', 'More than 1.000 directory entries available.');
 					} else {
 						message = t('user_ldap', objectsFound + ' entries available within the provided Base DN');
 					}
 				} else {
-					message = t('user_ldap', 'An error occurred. Please check the Base DN, as well as connection settings and credentials.');
+					message = view.overrideErrorMessage(payload.data.message);
+					message = message || t('user_ldap', 'An error occurred. Please check the Base DN, as well as connection settings and credentials.');
 					if(payload.data.message) {
 						console.warn(payload.data.message);
 					}
@@ -293,7 +313,9 @@ OCA = OCA || {};
 		 */
 		onBaseDNTestButtonClick: function(event) {
 			event.preventDefault();
+			this.baseDNTestTriggered = true;
 			this.configModel.requestWizard('ldap_test_base');
+			this.disableElement(this.managedItems.ldap_base.$testButton);
 		},
 
 		/**
@@ -303,9 +325,10 @@ OCA = OCA || {};
 		 * @private
 		 */
 		_enableConfigChooser: function() {
+			this._configChooserNextServerNumber = this.$configChooser.find(' option').length + 1;
 			var view = this;
-			$(this.configChooserID).change(function(){
-				var value = $(view.configChooserID + ' option:selected:first').attr('value');
+			this.$configChooser.change(function(){
+				var value = view.$configChooser.find(' option:selected:first').attr('value');
 				view.configModel.load(value);
 			});
 		},

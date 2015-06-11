@@ -28,9 +28,12 @@
  */
 
 namespace OC\Files\Storage;
+
 use OC\Files\Filesystem;
 use OCA\Files_Sharing\ISharedStorage;
+use OCA\Files_Sharing\Propagator;
 use OCA\Files_Sharing\SharedMount;
+use OCP\Lock\ILockingProvider;
 
 /**
  * Convert target path to source path and pass the function call to the correct storage provider
@@ -47,6 +50,7 @@ class Shared extends \OC\Files\Storage\Common implements ISharedStorage {
 
 	/**
 	 * get id of the mount point
+	 *
 	 * @return string
 	 */
 	public function getId() {
@@ -55,16 +59,18 @@ class Shared extends \OC\Files\Storage\Common implements ISharedStorage {
 
 	/**
 	 * get file cache of the shared item source
+	 *
 	 * @return int
 	 */
 	public function getSourceId() {
-		return (int) $this->share['file_source'];
+		return (int)$this->share['file_source'];
 	}
 
 	/**
 	 * Get the source file path, permissions, and owner for a shared file
+	 *
 	 * @param string $target Shared target file path
-	 * @return Returns array with the keys path, permissions, and owner or false if not found
+	 * @return array Returns array with the keys path, permissions, and owner or false if not found
 	 */
 	public function getFile($target) {
 		if (!isset($this->files[$target])) {
@@ -86,6 +92,7 @@ class Shared extends \OC\Files\Storage\Common implements ISharedStorage {
 
 	/**
 	 * Get the source file path for a shared file
+	 *
 	 * @param string $target Shared target file path
 	 * @return string|false source file path or false if not found
 	 */
@@ -109,6 +116,7 @@ class Shared extends \OC\Files\Storage\Common implements ISharedStorage {
 
 	/**
 	 * Get the permissions granted for a shared file
+	 *
 	 * @param string $target Shared target file path
 	 * @return int CRUDS permissions granted
 	 */
@@ -138,13 +146,14 @@ class Shared extends \OC\Files\Storage\Common implements ISharedStorage {
 
 	/**
 	 * Delete the directory if DELETE permission is granted
+	 *
 	 * @param string $path
 	 * @return boolean
 	 */
 	public function rmdir($path) {
 
 		// never delete a share mount point
-		if(empty($path)) {
+		if (empty($path)) {
 			return false;
 		}
 
@@ -208,7 +217,13 @@ class Shared extends \OC\Files\Storage\Common implements ISharedStorage {
 	}
 
 	public function isReadable($path) {
-		return $this->file_exists($path);
+		$isReadable = false;
+		if ($source = $this->getSourcePath($path)) {
+			list($storage, $internalPath) = \OC\Files\Filesystem::resolvePath($source);
+			$isReadable = $storage->isReadable($internalPath);
+		}
+
+		return $isReadable && $this->file_exists($path);
 	}
 
 	public function isUpdatable($path) {
@@ -277,6 +292,7 @@ class Shared extends \OC\Files\Storage\Common implements ISharedStorage {
 
 	/**
 	 * Delete the file if DELETE permission is granted
+	 *
 	 * @param string $path
 	 * @return boolean
 	 */
@@ -316,30 +332,32 @@ class Shared extends \OC\Files\Storage\Common implements ISharedStorage {
 			}
 		}
 
-		// for part files we need to ask for the owner and path from the parent directory because
-		// the file cache doesn't return any results for part files
-		if ($isPartFile) {
-			list($user1, $path1) = \OCA\Files_Sharing\Helper::getUidAndFilename($pathinfo['dirname']);
-			$path1 = $path1 . '/' . $pathinfo['basename'];
-		} else {
-			list($user1, $path1) = \OCA\Files_Sharing\Helper::getUidAndFilename($relPath1);
-		}
-		$targetFilename = basename($relPath2);
-		list($user2, $path2) = \OCA\Files_Sharing\Helper::getUidAndFilename(dirname($relPath2));
-		$rootView = new \OC\Files\View('');
-		$rootView->getUpdater()->disable(); // dont update the cache here
-		$result = $rootView->rename('/' . $user1 . '/files/' . $path1, '/' . $user2 . '/files/' . $path2 . '/' . $targetFilename);
-		$rootView->getUpdater()->enable();
-		return $result;
+
+		/**
+		 * @var \OC\Files\Storage\Storage $sourceStorage
+		 */
+		list($sourceStorage, $sourceInternalPath) = $this->resolvePath($path1);
+		/**
+		 * @var \OC\Files\Storage\Storage $targetStorage
+		 */
+		list($targetStorage, $targetInternalPath) = $this->resolvePath($path2);
+
+		return $targetStorage->moveFromStorage($sourceStorage, $sourceInternalPath, $targetInternalPath);
 	}
 
 	public function copy($path1, $path2) {
 		// Copy the file if CREATE permission is granted
 		if ($this->isCreatable(dirname($path2))) {
-			$oldSource = $this->getSourcePath($path1);
-			$newSource = $this->getSourcePath(dirname($path2)) . '/' . basename($path2);
-			$rootView = new \OC\Files\View('');
-			return $rootView->copy($oldSource, $newSource);
+			/**
+			 * @var \OC\Files\Storage\Storage $sourceStorage
+			 */
+			list($sourceStorage, $sourceInternalPath) = $this->resolvePath($path1);
+			/**
+			 * @var \OC\Files\Storage\Storage $targetStorage
+			 */
+			list($targetStorage, $targetInternalPath) = $this->resolvePath($path2);
+
+			return $targetStorage->copyFromStorage($sourceStorage, $sourceInternalPath, $targetInternalPath);
 		}
 		return false;
 	}
@@ -426,37 +444,6 @@ class Shared extends \OC\Files\Storage\Common implements ISharedStorage {
 		return false;
 	}
 
-	public static function setup($options) {
-		$user = $options['user'];
-		$shares = \OCP\Share::getItemsSharedWithUser('file', $user);
-		$manager = Filesystem::getMountManager();
-		$loader = Filesystem::getLoader();
-		if (
-			!isset(self::$isInitialized[$user]) && (
-				!\OCP\User::isLoggedIn()
-				|| \OCP\User::getUser() != $options['user']
-				|| $shares
-			)
-		) {
-			foreach ($shares as $share) {
-				// don't mount shares where we have no permissions
-				if ($share['permissions'] > 0) {
-					$mount = new SharedMount(
-							'\OC\Files\Storage\Shared',
-							$options['user_dir'] . '/' . $share['file_target'],
-							array(
-								'share' => $share,
-								'user' => $user
-							),
-							$loader
-							);
-					$manager->addMount($mount);
-				}
-			}
-		}
-		self::$isInitialized[$user] = true;
-	}
-
 	/**
 	 * return mount point of share, relative to data/user/files
 	 *
@@ -476,6 +463,7 @@ class Shared extends \OC\Files\Storage\Common implements ISharedStorage {
 
 	/**
 	 * does the group share already has a user specific unique name
+	 *
 	 * @return bool
 	 */
 	public function uniqueNameSet() {
@@ -493,6 +481,7 @@ class Shared extends \OC\Files\Storage\Common implements ISharedStorage {
 
 	/**
 	 * get share ID
+	 *
 	 * @return integer unique share ID
 	 */
 	public function getShareId() {
@@ -501,6 +490,7 @@ class Shared extends \OC\Files\Storage\Common implements ISharedStorage {
 
 	/**
 	 * get the user who shared the file
+	 *
 	 * @return string
 	 */
 	public function getSharedFrom() {
@@ -516,6 +506,7 @@ class Shared extends \OC\Files\Storage\Common implements ISharedStorage {
 
 	/**
 	 * return share type, can be "file" or "folder"
+	 *
 	 * @return string
 	 */
 	public function getItemType() {
@@ -619,5 +610,39 @@ class Shared extends \OC\Files\Storage\Common implements ISharedStorage {
 		/** @var \OCP\Files\Storage $targetStorage */
 		list($targetStorage, $targetInternalPath) = $this->resolvePath($targetInternalPath);
 		return $targetStorage->moveFromStorage($sourceStorage, $sourceInternalPath, $targetInternalPath);
+	}
+
+	/**
+	 * @param string $path
+	 * @param int $type \OCP\Lock\ILockingProvider::LOCK_SHARED or \OCP\Lock\ILockingProvider::LOCK_EXCLUSIVE
+	 * @param \OCP\Lock\ILockingProvider $provider
+	 * @throws \OCP\Lock\LockedException
+	 */
+	public function acquireLock($path, $type, ILockingProvider $provider) {
+		/** @var \OCP\Files\Storage $targetStorage */
+		list($targetStorage, $targetInternalPath) = $this->resolvePath($path);
+		$targetStorage->acquireLock($targetInternalPath, $type, $provider);
+	}
+
+	/**
+	 * @param string $path
+	 * @param int $type \OCP\Lock\ILockingProvider::LOCK_SHARED or \OCP\Lock\ILockingProvider::LOCK_EXCLUSIVE
+	 * @param \OCP\Lock\ILockingProvider $provider
+	 */
+	public function releaseLock($path, $type, ILockingProvider $provider) {
+		/** @var \OCP\Files\Storage $targetStorage */
+		list($targetStorage, $targetInternalPath) = $this->resolvePath($path);
+		$targetStorage->releaseLock($targetInternalPath, $type, $provider);
+	}
+
+	/**
+	 * @param string $path
+	 * @param int $type \OCP\Lock\ILockingProvider::LOCK_SHARED or \OCP\Lock\ILockingProvider::LOCK_EXCLUSIVE
+	 * @param \OCP\Lock\ILockingProvider $provider
+	 */
+	public function changeLock($path, $type, ILockingProvider $provider) {
+		/** @var \OCP\Files\Storage $targetStorage */
+		list($targetStorage, $targetInternalPath) = $this->resolvePath($path);
+		$targetStorage->changeLock($targetInternalPath, $type, $provider);
 	}
 }

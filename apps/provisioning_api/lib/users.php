@@ -27,6 +27,7 @@ use \OC_SubAdmin;
 use \OC_User;
 use \OC_Group;
 use \OC_Helper;
+use OCP\Files\NotFoundException;
 
 class Users {
 
@@ -92,16 +93,8 @@ class Users {
 		$config = \OC::$server->getConfig();
 
 		// Find the data
-		$data = array();
-		\OC_Util::tearDownFS();
-		\OC_Util::setupFS($userId);
-		$storage = OC_Helper::getStorageInfo('/');
-		$data['quota'] = array(
-			'free' =>  $storage['free'],
-			'used' =>  $storage['used'],
-			'total' =>  $storage['total'],
-			'relative' => $storage['relative'],
-			);
+		$data = [];
+		$data = self::fillStorageInfo($userId, $data);
 		$data['enabled'] = $config->getUserValue($userId, 'core', 'enabled', 'true');
 		$data['email'] = $config->getUserValue($userId, 'settings', 'email');
 		$data['displayname'] = OC_User::getDisplayName($parameters['userid']);
@@ -155,7 +148,14 @@ class Users {
 			case 'quota':
 				$quota = $parameters['_put']['value'];
 				if($quota !== 'none' and $quota !== 'default') {
-					$quota = OC_Helper::computerFileSize($quota);
+					if (is_numeric($quota)) {
+						$quota = floatval($quota);
+					} else {
+						$quota = OC_Helper::computerFileSize($quota);
+					}
+					if ($quota === false) {
+						return new OC_OCS_Result(null, 103, "Invalid quota value {$parameters['_put']['value']}");
+					}
 					if($quota == 0) {
 						$quota = 'default';
 					}else if($quota == -1){
@@ -342,5 +342,28 @@ class Users {
 		} else {
 			return new OC_OCS_Result($groups);
 		}
+	}
+
+	/**
+	 * @param $userId
+	 * @param $data
+	 * @return mixed
+	 * @throws \OCP\Files\NotFoundException
+	 */
+	private static function fillStorageInfo($userId, $data) {
+		try {
+			\OC_Util::tearDownFS();
+			\OC_Util::setupFS($userId);
+			$storage = OC_Helper::getStorageInfo('/');
+			$data['quota'] = [
+				'free' => $storage['free'],
+				'used' => $storage['used'],
+				'total' => $storage['total'],
+				'relative' => $storage['relative'],
+			];
+		} catch (NotFoundException $ex) {
+			$data['quota'] = [];
+		}
+		return $data;
 	}
 }

@@ -53,6 +53,11 @@ class Connection extends LDAPUtility {
 	private $dontDestruct = false;
 	private $hasPagedResultSupport = true;
 
+	/**
+	 * @var bool runtime flag that indicates whether supported primary groups are available
+	 */
+	public $hasPrimaryGroups = true;
+
 	//cache handler
 	protected $cache;
 
@@ -78,8 +83,6 @@ class Connection extends LDAPUtility {
 		$memcache = \OC::$server->getMemCacheFactory();
 		if($memcache->isAvailable()) {
 			$this->cache = $memcache->create();
-		} else {
-			$this->cache = \OC\Cache::getGlobalCache();
 		}
 		$this->hasPagedResultSupport =
 			$this->ldap->hasPagedResultSupport();
@@ -195,7 +198,7 @@ class Connection extends LDAPUtility {
 		if(!$this->configured) {
 			$this->readConfiguration();
 		}
-		if(!$this->configuration->ldapCacheTTL) {
+		if(is_null($this->cache) || !$this->configuration->ldapCacheTTL) {
 			return null;
 		}
 		if(!$this->isCached($key)) {
@@ -215,7 +218,7 @@ class Connection extends LDAPUtility {
 		if(!$this->configured) {
 			$this->readConfiguration();
 		}
-		if(!$this->configuration->ldapCacheTTL) {
+		if(is_null($this->cache) || !$this->configuration->ldapCacheTTL) {
 			return false;
 		}
 		$key = $this->getCacheKey($key);
@@ -225,12 +228,15 @@ class Connection extends LDAPUtility {
 	/**
 	 * @param string $key
 	 * @param mixed $value
+	 *
+	 * @return string
 	 */
 	public function writeToCache($key, $value) {
 		if(!$this->configured) {
 			$this->readConfiguration();
 		}
-		if(!$this->configuration->ldapCacheTTL
+		if(is_null($this->cache)
+			|| !$this->configuration->ldapCacheTTL
 			|| !$this->configuration->ldapConfigurationActive) {
 			return null;
 		}
@@ -240,7 +246,9 @@ class Connection extends LDAPUtility {
 	}
 
 	public function clearCache() {
-		$this->cache->clear($this->getCacheKey(null));
+		if(!is_null($this->cache)) {
+			$this->cache->clear($this->getCacheKey(null));
+		}
 	}
 
 	/**

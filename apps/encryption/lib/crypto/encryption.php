@@ -25,14 +25,18 @@
 namespace OCA\Encryption\Crypto;
 
 
+use OC\Encryption\Exceptions\DecryptionFailedException;
+use OCA\Encryption\Exceptions\PublicKeyMissingException;
 use OCA\Encryption\Util;
 use OCP\Encryption\IEncryptionModule;
 use OCA\Encryption\KeyManager;
+use OCP\IL10N;
+use OCP\ILogger;
 
 class Encryption implements IEncryptionModule {
 
 	const ID = 'OC_DEFAULT_MODULE';
-	const DISPLAY_NAME = 'ownCloud Default Encryption';
+	const DISPLAY_NAME = 'Default encryption module';
 
 	/**
 	 * @var Crypt
@@ -66,16 +70,30 @@ class Encryption implements IEncryptionModule {
 	/** @var Util */
 	private $util;
 
+	/** @var  ILogger */
+	private $logger;
+
+	/** @var IL10N */
+	private $l;
+
 	/**
 	 *
-	 * @param \OCA\Encryption\Crypto\Crypt $crypt
+	 * @param Crypt $crypt
 	 * @param KeyManager $keyManager
 	 * @param Util $util
+	 * @param ILogger $logger
+	 * @param IL10N $il10n
 	 */
-	public function __construct(Crypt $crypt, KeyManager $keyManager, Util $util) {
+	public function __construct(Crypt $crypt,
+								KeyManager $keyManager,
+								Util $util,
+								ILogger $logger,
+								IL10N $il10n) {
 		$this->crypt = $crypt;
 		$this->keyManager = $keyManager;
 		$this->util = $util;
+		$this->logger = $logger;
+		$this->l = $il10n;
 	}
 
 	/**
@@ -111,26 +129,35 @@ class Encryption implements IEncryptionModule {
 	 */
 	public function begin($path, $user, $mode, array $header, array $accessList) {
 
-		if (isset($header['cipher'])) {
-			$this->cipher = $header['cipher'];
-		} else if (
+		$this->path = $this->getPathToRealFile($path);
+		$this->accessList = $accessList;
+		$this->user = $user;
+		$this->isWriteOperation = false;
+		$this->writeCache = '';
+
+		$this->fileKey = $this->keyManager->getFileKey($this->path, $this->user);
+
+		if (
 			$mode === 'w'
 			|| $mode === 'w+'
 			|| $mode === 'wb'
 			|| $mode === 'wb+'
 		) {
-			$this->cipher = $this->crypt->getCipher();
-		} else {
-			$this->cipher = $this->crypt->getLegacyCipher();
+			$this->isWriteOperation = true;
+			if (empty($this->fileKey)) {
+				$this->fileKey = $this->crypt->generateFileKey();
+			}
 		}
 
-		$this->path = $this->getPathToRealFile($path);
-		$this->accessList = $accessList;
-		$this->user = $user;
-		$this->writeCache = '';
-		$this->isWriteOperation = false;
-
-		$this->fileKey = $this->keyManager->getFileKey($this->path, $this->user);
+		if (isset($header['cipher'])) {
+			$this->cipher = $header['cipher'];
+		} elseif ($this->isWriteOperation) {
+			$this->cipher = $this->crypt->getCipher();
+		} else {
+			// if we read a file without a header we fall-back to the legacy cipher
+			// which was used in <=oC6
+			$this->cipher = $this->crypt->getLegacyCipher();
+		}
 
 		return array('cipher' => $this->cipher);
 	}
@@ -143,6 +170,9 @@ class Encryption implements IEncryptionModule {
 	 * @param string $path to the file
 	 * @return string remained data which should be written to the file in case
 	 *                of a write operation
+	 * @throws PublicKeyMissingException
+	 * @throws \Exception
+	 * @throws \OCA\Encryption\Exceptions\MultiKeyEncryptException
 	 */
 	public function end($path) {
 		$result = '';
@@ -153,10 +183,21 @@ class Encryption implements IEncryptionModule {
 			}
 			$publicKeys = array();
 			foreach ($this->accessList['users'] as $uid) {
-				$publicKeys[$uid] = $this->keyManager->getPublicKey($uid);
+				try {
+					$publicKeys[$uid] = $this->keyManager->getPublicKey($uid);
+				} catch (PublicKeyMissingException $e) {
+					$this->logger->warning(
+						'no public key found for user "{uid}", user will not be able to read the file',
+						['app' => 'encryption', 'uid' => $uid]
+					);
+					// if the public key of the owner is missing we should fail
+					if ($uid === $this->user) {
+						throw $e;
+					}
+				}
 			}
 
-			$publicKeys = $this->keyManager->addSystemKeys($this->accessList, $publicKeys);
+			$publicKeys = $this->keyManager->addSystemKeys($this->accessList, $publicKeys, $this->user);
 
 			$encryptedKeyfiles = $this->crypt->multiKeyEncrypt($this->fileKey, $publicKeys);
 			$this->keyManager->setAllFileKeys($this->path, $encryptedKeyfiles);
@@ -171,10 +212,6 @@ class Encryption implements IEncryptionModule {
 	 * @return mixed encrypted data
 	 */
 	public function encrypt($data) {
-		$this->isWriteOperation = true;
-		if (empty($this->fileKey)) {
-			$this->fileKey = $this->crypt->generateFileKey();
-		}
 
 		// If extra data is left over from the last round, make sure it
 		// is integrated into the next 6126 / 8192 block
@@ -238,8 +275,17 @@ class Encryption implements IEncryptionModule {
 	 *
 	 * @param string $data you want to decrypt
 	 * @return mixed decrypted data
+	 * @throws DecryptionFailedException
 	 */
 	public function decrypt($data) {
+		if (empty($this->fileKey)) {
+			$msg = 'Can not decrypt this file, probably this is a shared file. Please ask the file owner to reshare the file with you.';
+			$hint = $this->l->t('Can not decrypt this file, probably this is a shared file. Please ask the file owner to reshare the file with you.');
+			$this->logger->error($msg);
+
+			throw new DecryptionFailedException($msg, $hint);
+		}
+
 		$result = '';
 		if (!empty($data)) {
 			$result = $this->crypt->symmetricDecryptFileContent($data, $this->fileKey, $this->cipher);
@@ -257,43 +303,31 @@ class Encryption implements IEncryptionModule {
 	 */
 	public function update($path, $uid, array $accessList) {
 		$fileKey = $this->keyManager->getFileKey($path, $uid);
-		$publicKeys = array();
-		foreach ($accessList['users'] as $user) {
-			$publicKeys[$user] = $this->keyManager->getPublicKey($user);
+
+		if (!empty($fileKey)) {
+
+			$publicKeys = array();
+			foreach ($accessList['users'] as $user) {
+				$publicKeys[$user] = $this->keyManager->getPublicKey($user);
+			}
+
+			$publicKeys = $this->keyManager->addSystemKeys($accessList, $publicKeys, $uid);
+
+			$encryptedFileKey = $this->crypt->multiKeyEncrypt($fileKey, $publicKeys);
+
+			$this->keyManager->deleteAllFileKeys($path);
+
+			$this->keyManager->setAllFileKeys($path, $encryptedFileKey);
+
+		} else {
+			$this->logger->debug('no file key found, we assume that the file "{file}" is not encrypted',
+				array('file' => $path, 'app' => 'encryption'));
+
+			return false;
 		}
-
-		$publicKeys = $this->keyManager->addSystemKeys($accessList, $publicKeys);
-
-		$encryptedFileKey = $this->crypt->multiKeyEncrypt($fileKey, $publicKeys);
-
-		$this->keyManager->deleteAllFileKeys($path);
-
-		$this->keyManager->setAllFileKeys($path, $encryptedFileKey);
 
 		return true;
 	}
-
-	/**
-	 * add system keys such as the public share key and the recovery key
-	 *
-	 * @param array $accessList
-	 * @param array $publicKeys
-	 * @return array
-	 */
-	public function addSystemKeys(array $accessList, array $publicKeys) {
-		if (!empty($accessList['public'])) {
-			$publicKeys[$this->keyManager->getPublicShareKeyId()] = $this->keyManager->getPublicShareKey();
-		}
-
-		if ($this->keyManager->recoveryKeyExists() &&
-			$this->util->isRecoveryEnabledForUser()) {
-
-			$publicKeys[$this->keyManager->getRecoveryKeyId()] = $this->keyManager->getRecoveryKey();
-		}
-
-		return $publicKeys;
-	}
-
 
 	/**
 	 * should the file be encrypted or not
@@ -303,7 +337,7 @@ class Encryption implements IEncryptionModule {
 	 */
 	public function shouldEncrypt($path) {
 		$parts = explode('/', $path);
-		if (count($parts) < 3) {
+		if (count($parts) < 4) {
 			return false;
 		}
 
@@ -311,6 +345,9 @@ class Encryption implements IEncryptionModule {
 			return true;
 		}
 		if ($parts[2] == 'files_versions') {
+			return true;
+		}
+		if ($parts[2] == 'files_trashbin') {
 			return true;
 		}
 
@@ -328,6 +365,36 @@ class Encryption implements IEncryptionModule {
 	}
 
 	/**
+	 * check if the encryption module is able to read the file,
+	 * e.g. if all encryption keys exists
+	 *
+	 * @param string $path
+	 * @param string $uid user for whom we want to check if he can read the file
+	 * @return bool
+	 * @throws DecryptionFailedException
+	 */
+	public function isReadable($path, $uid) {
+		$fileKey = $this->keyManager->getFileKey($path, $uid);
+		if (empty($fileKey)) {
+			$owner = $this->util->getOwner($path);
+			if ($owner !== $uid) {
+				// if it is a shared file we throw a exception with a useful
+				// error message because in this case it means that the file was
+				// shared with the user at a point where the user didn't had a
+				// valid private/public key
+				$msg = 'Encryption module "' . $this->getDisplayName() .
+					'" is not able to read ' . $path;
+				$hint = $this->l->t('Can not read this file, probably this is a shared file. Please ask the file owner to reshare the file with you.');
+				$this->logger->warning($msg);
+				throw new DecryptionFailedException($msg, $hint);
+			}
+			return false;
+		}
+
+		return true;
+	}
+
+	/**
 	 * @param string $path
 	 * @return string
 	 */
@@ -342,4 +409,5 @@ class Encryption implements IEncryptionModule {
 
 		return $realPath;
 	}
+
 }

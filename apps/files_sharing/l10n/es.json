@@ -19,7 +19,7 @@
     "Remote share password" : "Contraseña del compartido remoto",
     "Cancel" : "Cancelar",
     "Add remote share" : "Añadir recurso compartido remoto",
-    "You can upload into this folder" : "Usted puede cargar a este folder",
+    "You can upload into this folder" : "Usted puede cargar en esta carpeta",
     "No ownCloud installation (7 or higher) found at {remote}" : "No se encontró una instalación de ownCloud (7 o mayor) en {remote}",
     "Invalid ownCloud url" : "URL de ownCloud inválida",
     "Share" : "Compartir",
@@ -57,6 +57,8 @@
     "Federated Cloud Sharing" : "Compartido en Cloud Federado",
     "Open documentation" : "Documentación abierta",
     "Allow users on this server to send shares to other servers" : "Permitir a usuarios de este servidor compartir con usuarios de otros servidores",
-    "Allow users on this server to receive shares from other servers" : "Permitir a usuarios de este servidor recibir archivos de usuarios de otros servidores"
+    "Allow users on this server to receive shares from other servers" : "Permitir a usuarios de este servidor recibir archivos de usuarios de otros servidores",
+    "Federated Cloud" : "Nube Federada",
+    "Your Federated Cloud ID: %s" : "Su ID de nube federada: %s"
 },"pluralForm" :"nplurals=2; plural=(n != 1);"
 }

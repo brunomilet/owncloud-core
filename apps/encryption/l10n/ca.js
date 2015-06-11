@@ -10,15 +10,9 @@ OC.L10N.register(
     "Private key password successfully updated." : "La contrasenya de la clau privada s'ha actualitzat.",
     "Invalid private key for Encryption App. Please update your private key password in your personal settings to recover access to your encrypted files." : "La clau privada de l'aplicació d'encriptació no és vàlida! Actualitzeu la contrasenya de la clau privada a l'arranjament personal per recuperar els fitxers encriptats.",
     "Encryption App is enabled but your keys are not initialized, please log-out and log-in again" : "L'aplicació d'encriptació està activada però les claus no estan inicialitzades, sortiu i acrediteu-vos de nou.",
-    "Enable recovery key (allow to recover users files in case of password loss):" : "Activa la clau de recuperació (permet recuperar fitxers d'usuaris en cas de pèrdua de contrasenya):",
+    "Can not decrypt this file, probably this is a shared file. Please ask the file owner to reshare the file with you." : "No es pot desencriptar aquest fitxer, probablement és un fitxer compartit. Demaneu al propietari del fitxer que el comparteixi de nou amb vós.",
     "Recovery key password" : "Clau de recuperació de la contrasenya",
-    "Repeat Recovery key password" : "Repetiu la clau de recuperació de contrasenya",
-    "Enabled" : "Activat",
-    "Disabled" : "Desactivat",
     "Change recovery key password:" : "Canvia la clau de recuperació de contrasenya:",
-    "Old Recovery key password" : "Antiga clau de recuperació de contrasenya",
-    "New Recovery key password" : "Nova clau de recuperació de contrasenya",
-    "Repeat New Recovery key password" : "Repetiu la nova clau de recuperació de contrasenya",
     "Change Password" : "Canvia la contrasenya",
     "Your private key password no longer matches your log-in password." : "La clau privada ja no es correspon amb la contrasenya d'accés:",
     "Set your old private key password to your current log-in password:" : "Establiu la vostra antiga clau privada a l'actual contrasenya d'accés:",
@@ -27,6 +21,8 @@ OC.L10N.register(
     "Current log-in password" : "Contrasenya d'accés actual",
     "Update Private Key Password" : "Actualitza la contrasenya de clau privada",
     "Enable password recovery:" : "Habilita la recuperació de contrasenya:",
-    "Enabling this option will allow you to reobtain access to your encrypted files in case of password loss" : "Activar aquesta opció us permetrà obtenir de nou accés als vostres fitxers encriptats en cas de perdre la contrasenya"
+    "Enabling this option will allow you to reobtain access to your encrypted files in case of password loss" : "Activar aquesta opció us permetrà obtenir de nou accés als vostres fitxers encriptats en cas de perdre la contrasenya",
+    "Enabled" : "Activat",
+    "Disabled" : "Desactivat"
 },
 "nplurals=2; plural=(n != 1);");

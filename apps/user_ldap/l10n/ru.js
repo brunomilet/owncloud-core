@@ -22,13 +22,12 @@ OC.L10N.register(
     "Could not detect Base DN, please enter it manually." : "Не возможно обнаружить Base DN, пожалуйста задайте в ручную.",
     "{nthServer}. Server" : "Сервер {nthServer}.",
     "No object found in the given Base DN. Please revise." : "Не найдено объектов в Base DN. Пожалуйста перепроверьте.",
-    "More then 1.000 directory entries available." : "Доступно более 1.000 папок.",
     " entries available within the provided Base DN" : "элементы доступные в Базе",
     "Do you really want to delete the current Server Configuration?" : "Вы действительно хотите удалить существующую конфигурацию сервера?",
     "Confirm Deletion" : "Подтверждение удаления",
     "Select attributes" : "Выберите атрибуты",
-    "_%s group found_::_%s groups found_" : ["%s группа найдена","%s группы найдены","%s групп найдено"],
-    "_%s user found_::_%s users found_" : ["%s пользователь найден","%s пользователя найдено","%s пользователей найдено"],
+    "_%s group found_::_%s groups found_" : ["%s группа найдена","%s группы найдены","%s групп найдено","%s групп найдено"],
+    "_%s user found_::_%s users found_" : ["%s пользователь найден","%s пользователя найдено","%s пользователей найдено","%s пользователей найдено"],
     "Could not detect user display name attribute. Please specify it yourself in advanced ldap settings." : "Не удалось автоматически определить атрибут содержащий отображаемое имя пользователя. Зайдите в расширенные настройки ldap и укажите его вручную.",
     "Could not find the desired feature" : "Не удается найти требуемую функциональность",
     "Invalid Host" : "Некорректный адрес сервера",
@@ -42,7 +41,6 @@ OC.L10N.register(
     "Available groups" : "Доступные группы",
     "Selected groups" : "Выбранные группы",
     "The filter specifies which LDAP groups shall have access to the %s instance." : "Этот фильтр определяет какие LDAP группы должны иметь доступ к экземпляру %s.",
-    "Test Filter" : "Проверить фильтр",
     "LDAP / AD Username:" : "Имя пользователя LDAP/AD:",
     "Other Attributes:" : "Другие атрибуты:",
     "Defines the filter to apply, when login is attempted. %%uid replaces the username in the login action. Example: \"uid=%%uid\"" : "Определяет фильтр для применения при попытке входа. %%uid заменяет имя пользователя при входе в систему. Например: \"uid=%%uid\"",
@@ -118,4 +116,4 @@ OC.L10N.register(
     "Clear Username-LDAP User Mapping" : "Очистить соответствия Имя-Пользователь LDAP",
     "Clear Groupname-LDAP Group Mapping" : "Очистить соответствия Группа-Группа LDAP"
 },
-"nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);");
+"nplurals=4; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<12 || n%100>14) ? 1 : n%10==0 || (n%10>=5 && n%10<=9) || (n%100>=11 && n%100<=14)? 2 : 3);");

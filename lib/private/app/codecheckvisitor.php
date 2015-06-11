@@ -22,18 +22,9 @@
 
 namespace OC\App;
 
-use OC\Hooks\BasicEmitter;
-use PhpParser\Lexer;
 use PhpParser\Node;
 use PhpParser\Node\Name;
-use PhpParser\NodeTraverser;
 use PhpParser\NodeVisitorAbstract;
-use PhpParser\Parser;
-use RecursiveCallbackFilterIterator;
-use RecursiveDirectoryIterator;
-use RecursiveIteratorIterator;
-use RegexIterator;
-use SplFileInfo;
 
 class CodeCheckVisitor extends NodeVisitorAbstract {
 
@@ -44,6 +35,22 @@ class CodeCheckVisitor extends NodeVisitorAbstract {
 	public $errors = [];
 
 	public function enterNode(Node $node) {
+		if ($node instanceof Node\Expr\BinaryOp\Equal) {
+			$this->errors[]= [
+				'disallowedToken' => '==',
+				'errorCode' => CodeChecker::OP_OPERATOR_USAGE_DISCOURAGED,
+				'line' => $node->getLine(),
+				'reason' => $this->buildReason('==', CodeChecker::OP_OPERATOR_USAGE_DISCOURAGED)
+			];
+		}
+		if ($node instanceof Node\Expr\BinaryOp\NotEqual) {
+			$this->errors[]= [
+				'disallowedToken' => '!=',
+				'errorCode' => CodeChecker::OP_OPERATOR_USAGE_DISCOURAGED,
+				'line' => $node->getLine(),
+				'reason' => $this->buildReason('!=', CodeChecker::OP_OPERATOR_USAGE_DISCOURAGED)
+			];
+		}
 		if ($node instanceof Node\Stmt\Class_) {
 			if (!is_null($node->extends)) {
 				$this->checkBlackList($node->extends->toString(), CodeChecker::CLASS_EXTENDS_NOT_ALLOWED, $node);
@@ -114,6 +121,7 @@ class CodeCheckVisitor extends NodeVisitorAbstract {
 			CodeChecker::STATIC_CALL_NOT_ALLOWED => "static method call on private class",
 			CodeChecker::CLASS_CONST_FETCH_NOT_ALLOWED => "used to fetch a const from",
 			CodeChecker::CLASS_NEW_FETCH_NOT_ALLOWED => "is instanciated",
+			CodeChecker::OP_OPERATOR_USAGE_DISCOURAGED => "is discouraged"
 		];
 
 		if (isset($errorMessages[$errorCode])) {
